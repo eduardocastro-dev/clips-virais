@@ -14,3 +14,25 @@ frontend/node_modules/
 frontend/.next/
 test-results/
 *.tsbuildinfo
+
+backups/
+
+# Asset originals and per-production work never enter source control.
+assets/*
+!assets/.gitkeep
+!assets/gameplay/
+!assets/shorts/
+!assets/images/
+!assets/persona/
+assets/gameplay/*
+assets/shorts/*
+assets/images/*
+assets/persona/*
+!assets/gameplay/.gitkeep
+!assets/shorts/.gitkeep
+!assets/images/.gitkeep
+!assets/persona/.gitkeep
+temp/*
+!temp/.gitkeep
+assets/clips/
+assets/uploads/

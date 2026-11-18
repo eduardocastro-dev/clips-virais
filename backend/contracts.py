@@ -46,6 +46,14 @@ class ImportRequest(BaseModel):
     instructions: str = Field(default='', max_length=3000)
     template: str = 'gta-news'
     duration: int = Field(default=30, ge=10, le=90)
+    source_kind: str = Field(default='auto',pattern='^(auto|short|video)$')
+
+    @model_validator(mode='before')
+    @classmethod
+    def classify_short(cls, data):
+        if isinstance(data,dict) and '/shorts/' in str(data.get('url','')):
+            return {**data,'source_kind':'short'}
+        return data
 
     @field_validator('url')
     @classmethod
@@ -78,11 +86,39 @@ class ModelRoute(BaseModel):
     vision: bool = False
 
 
+class EvaluationCriterion(BaseModel):
+    name: str = Field(min_length=2, max_length=90)
+    description: str = Field(min_length=5, max_length=500)
+    weight: float = Field(default=1.0, ge=0, le=10)
+    min_score: float = Field(default=6.0, ge=0, le=10)
+    enabled: bool = True
+
+
+def default_evaluation_criteria() -> dict[str, EvaluationCriterion]:
+    labels = [
+        ('hook','Gancho','Impacto e clareza nos primeiros três segundos.'),
+        ('narrative','Narrativa','Coerência, roteiro e clareza da mensagem.'),
+        ('audio','Áudio','Narração inteligível, volume e ausência de falhas.'),
+        ('subtitles','Legendas','Sincronização, leitura e segurança visual.'),
+        ('cuts','Cortes','Precisão e continuidade dos trechos.'),
+        ('rhythm','Ritmo','Fluidez e ausência de trechos mortos.'),
+        ('resolution','Formato','Resolução, proporção e codecs adequados.'),
+        ('duration','Duração','Duração dentro da proposta definida.'),
+        ('briefing','Briefing','Aderência ao briefing do Escritor.'),
+        ('originality','Originalidade','Criação própria e uso transformativo responsável.'),
+        ('accuracy','Exatidão','Distingue rumores de notícias confirmadas; não inventa fatos.'),
+        ('rights','Direitos e créditos','Origem, autorizações e atribuições documentadas.'),
+    ]
+    return {key: EvaluationCriterion(name=name,description=desc,min_score=6.0) for key,name,desc in labels}
+
+
 class Settings(BaseModel):
     channel: str = Field(default='GTA Content Studio', min_length=1, max_length=80)
     language: str = 'pt-BR'
     countries: list[str] = Field(default_factory=lambda: ['US', 'GB', 'CA', 'AU'])
-    daily_limit: int = Field(default=3, ge=1, le=20)
+    daily_limit: int = Field(default=3, ge=1, le=100)
+    max_review_attempts: int = Field(default=5, ge=1, le=10)
+    evaluation_criteria: dict[str, EvaluationCriterion] = Field(default_factory=default_evaluation_criteria)
     duration: int = Field(default=30, ge=10, le=90)
     search_minutes: int = Field(default=180, ge=15, le=10080)
     retention_days: int = Field(default=7, ge=1, le=365)
@@ -105,6 +141,21 @@ class Settings(BaseModel):
     postiz_auto: bool = False
     postiz_channels: dict[str, str] = Field(default_factory=dict)
     postiz_settings: dict[str, dict] = Field(default_factory=dict)
+    clip_threshold_seconds: float = Field(default=45,ge=5,le=3600)
+    clip_seconds: float = Field(default=10,ge=2,le=120)
+    clip_min_tail_seconds: float = Field(default=3,ge=0.1,le=30)
+    upload_max_mb: int = Field(default=1024,ge=1,le=4096)
+    music_volume: float = Field(default=0.12,ge=0,le=0.6)
+    auto_catalog_shorts: bool = True
+    auto_download_authorized_shorts: bool = False
+    max_third_party_clip_seconds: float = Field(default=4, ge=1, le=5)
+    temporary_retention_days: int = Field(default=7, ge=1, le=90)
+
+    @model_validator(mode='after')
+    def clip_settings_valid(self):
+        if self.clip_min_tail_seconds>self.clip_seconds:
+            raise ValueError('Clipe mínimo final deve ser menor que o tamanho do clipe.')
+        return self
 
     @field_validator('postiz_url')
     @classmethod

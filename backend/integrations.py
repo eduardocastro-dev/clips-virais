@@ -2,11 +2,12 @@
 import json
 import base64
 import math
+import re
 import subprocess
 import sys
 import time
 from datetime import datetime, timezone
-from urllib.parse import urlsplit, parse_qs
+from urllib.parse import urlsplit, parse_qs, urlencode
 import httpx
 from sqlalchemy import text
 from backend import core as db
@@ -42,6 +43,8 @@ def youtube_metadata(url):
     if cached := db.cache_get(key):
         return cached
     vid = parse_qs(urlsplit(url).query)['v'][0]
+    if not db.secret('youtube_api_key'):
+        return public_youtube_metadata(url)
     items = youtube_get('videos', {'part': 'snippet,statistics,contentDetails,status', 'id': vid}).get('items', [])
     if not items:
         raise IntegrationError('Vídeo não encontrado ou não acessível pela API.')
@@ -59,6 +62,8 @@ def metadata(url, platform):
     url=url.split('#studio-variant=')[0]
     if platform == 'youtube':
         return youtube_metadata(url)
+    if platform == 'instagram':
+        return public_social_metadata(url, platform)
     # Public oEmbed provides reference metadata only, not reuse permission.
     endpoint = 'https://www.tiktok.com/oembed' if platform == 'tiktok' else None
     if not endpoint:
@@ -69,6 +74,121 @@ def metadata(url, platform):
     result = request('GET', endpoint, params={'url': url}).json()
     return {'title': result.get('title', ''), 'description': '', 'source_profile': result.get('author_name'),
             'metrics': {}, 'url': url, 'platform': platform, 'collected_at': time.time()}
+
+
+
+def public_social_metadata(url, platform):
+    """Public reference metadata only; does not bypass logins or grant media rights."""
+    cache_key = 'metadata:' + url
+    if cached := db.cache_get(cache_key):
+        return cached
+    try:
+        from yt_dlp import YoutubeDL
+        with YoutubeDL({'quiet': True, 'no_warnings': True, 'skip_download': True,
+                        'noplaylist': True, 'socket_timeout': 20, 'retries': 1}) as ydl:
+            data = ydl.extract_info(url, download=False)
+    except Exception:
+        raise IntegrationError(f'Metadados públicos do {platform} indisponíveis sem autenticação; use outra fonte.') from None
+    if not data:
+        raise IntegrationError(f'Metadados públicos do {platform} indisponíveis.')
+    result = {'title': str(data.get('title') or f'Vídeo de referência {platform}')[:300],
+              'description': str(data.get('description') or '')[:4000],
+              'source_profile': data.get('uploader'), 'metrics': {},
+              'url': url, 'platform': platform, 'rights': 'REFERENCE_ONLY',
+              'collected_at': time.time()}
+    db.cache_set(cache_key, result, 3600)
+    return result
+
+
+def public_youtube_metadata(url):
+    """Reference-only extraction. Public access may be throttled by YouTube."""
+    try:
+        from yt_dlp import YoutubeDL
+        with YoutubeDL({'quiet': True, 'no_warnings': True, 'skip_download': True,
+                        'noplaylist': True, 'socket_timeout': 20, 'retries': 1}) as ydl:
+            data = ydl.extract_info(url, download=False)
+    except Exception:
+        raise IntegrationError('Metadados públicos do YouTube indisponíveis; tente novamente ou use RSS.') from None
+    if not data or not data.get('title'):
+        raise IntegrationError('Metadados públicos indisponíveis para este vídeo.')
+    published = str(data.get('upload_date') or '')
+    if len(published) == 8 and published.isdigit():
+        published = f'{published[:4]}-{published[4:6]}-{published[6:]}T00:00:00Z'
+    result = {'title': data['title'][:300], 'description': (data.get('description') or '')[:4000],
+              'source_profile': data.get('uploader'), 'published': published or None,
+              'metrics': {k: data[v] for k, v in [('viewCount','view_count'),('likeCount','like_count'),
+                          ('commentCount','comment_count')] if isinstance(data.get(v), int)},
+              'url': url, 'platform': 'youtube', 'collected_at': time.time(), 'rights': 'REFERENCE_ONLY'}
+    db.cache_set('metadata:' + url, result, 3600)
+    return result
+
+
+# YouTube introduced a dedicated Shorts search type in 2026. This is NOT
+# the old duration filter (which also includes ordinary short videos).
+SHORTS_SEARCH_FILTER = 'EgIQCQ=='
+SHORTS_MAX_SECONDS = 180  # Reject known overlong results; not the sole Shorts test.
+
+
+def shorts_search_target(profile=None):
+    if profile:
+        if profile['platform'] != 'youtube':
+            raise IntegrationError('A descoberta automática aceita apenas perfis YouTube Shorts.')
+        return profile['url'].rstrip('/') + '/shorts'
+    return 'https://www.youtube.com/results?' + urlencode({
+        'search_query': 'GTA 6 Grand Theft Auto VI', 'sp': SHORTS_SEARCH_FILTER})
+
+
+def public_youtube_discover(profile=None):
+    """Discover from YouTube's dedicated Shorts search/channel tabs.
+
+    Reference-only metadata. Never download or claim redistribution rights.
+    YouTube can alter its search UI or throttle access; empty results are valid.
+    """
+    target = shorts_search_target(profile)
+    try:
+        from yt_dlp import YoutubeDL
+        with YoutubeDL({'quiet': True, 'no_warnings': True, 'skip_download': True,
+                        'extract_flat': True, 'ignoreerrors': True, 'socket_timeout': 20,
+                        'playlistend': 30, 'retries': 1}) as ydl:
+            results = ydl.extract_info(target, download=False)
+    except IntegrationError:
+        raise
+    except Exception:
+        raise IntegrationError('A pesquisa de Shorts está indisponível no YouTube; tente mais tarde.') from None
+    found = []
+    for item in (results or {}).get('entries') or []:
+        if not isinstance(item, dict):
+            continue
+        vid = item.get('id')
+        if not isinstance(vid, str) or not re.fullmatch(r'[A-Za-z0-9_-]{11}', vid):
+            continue
+        # These results come from the dedicated /shorts tab or Shorts search
+        # type, not the ordinary video search. Guard against anomalous entries.
+        duration = item.get('duration')
+        if isinstance(duration, (int, float)) and (duration <= 0 or duration > SHORTS_MAX_SECONDS):
+            continue
+        paths = [str(item.get(key) or '') for key in ('url', 'webpage_url', 'original_url')]
+        if any('/watch?' in path or '/live/' in path for path in paths):
+            # A watch URL alone is not a proof of Shorts, so never accept it.
+            if not any('/shorts/' in path for path in paths):
+                continue
+        title = str(item.get('title') or '')[:300]
+        description = str(item.get('description') or '')[:4000]
+        if not re.search(r'gta\s*(6|vi)|grand theft auto', title + ' ' + description, re.I):
+            continue
+        url = f'https://www.youtube.com/shorts/{vid}'
+        meta = {'url': url, 'platform': 'youtube', 'format': 'shorts',
+                'title': title, 'description': description,
+                'source_profile': item.get('uploader'), 'published': None,
+                'duration': duration, 'metrics': {}, 'rights': 'REFERENCE_ONLY',
+                'shorts_discovery': 'channel_shorts_tab' if profile else 'youtube_shorts_search_filter',
+                'collected_at': time.time()}
+        db.execute("""INSERT INTO opportunities VALUES (:id,:url,'youtube',:title,:metadata,:score,:now,:profile)
+            ON CONFLICT(url) DO UPDATE SET metadata=excluded.metadata,score=excluded.score""",
+            {'id': db.uid(), 'url': url, 'title': title, 'metadata': json.dumps(meta,ensure_ascii=False),
+             'score': None, 'now': time.time(), 'profile': profile['id'] if profile else None})
+        found.append(url)
+    return found
 
 
 def viral_score(meta):
@@ -85,45 +205,70 @@ def viral_score(meta):
     return round(min(10, math.log10(1 + velocity) * 1.5 + min(2, engagement * 30) + max(0, 2 - age / 168)), 2)
 
 
-def discover(profile=None):
-    params = {'part': 'snippet', 'type': 'video', 'maxResults': 10, 'order': 'date', 'q': 'GTA 6'}
-    if profile:
-        if profile['platform'] != 'youtube':
-            from backend.sources import connected_profile
-            return [x['url'] for x in connected_profile(profile)]
-        path = urlsplit(profile['url']).path
-        if path.startswith('/channel/'):
-            params['channelId'] = path.split('/')[-1]
-        else:
-            found = youtube_get('channels', {'part': 'id', 'forHandle': path.strip('/')}).get('items', [])
-            if not found:
-                raise IntegrationError('Canal não encontrado.')
-            params['channelId'] = found[0]['id']
-        params.pop('q')
-    else:
-        countries = db.settings().countries
-        params['regionCode'] = countries[int(time.time() // 3600) % len(countries)] if countries else 'US'
-    cache_key = 'search:' + json.dumps(params, sort_keys=True)
-    data = db.cache_get(cache_key)
-    if data is None:
-        data = youtube_get('search', params)
-        db.cache_set(cache_key, data, 1800)
-    found = []
-    for item in data.get('items', []):
-        vid = item.get('id', {}).get('videoId')
-        if not vid:
+def public_youtube_videos(profile=None):
+    """Public YouTube *video* search as supplemental source (Shorts have priority).
+
+    Search metadata only. Neither a successful search nor a license tag grants
+    download/reuse permissions for gameplay.
+    """
+    if profile and profile['platform'] != 'youtube':
+        raise IntegrationError('Consulta pública de vídeos disponível para perfis YouTube.')
+    target = (profile['url'].rstrip('/') + '/videos') if profile else 'ytsearchdate40:GTA 6 gameplay trailer curiosidades Rockstar'
+    try:
+        from yt_dlp import YoutubeDL
+        with YoutubeDL({'quiet': True, 'no_warnings': True, 'skip_download': True,
+                        'extract_flat': True, 'ignoreerrors': True, 'socket_timeout': 20,
+                        'playlistend': 35, 'retries': 1}) as ydl:
+            results = ydl.extract_info(target, download=False)
+    except Exception:
+        raise IntegrationError('Busca pública de vídeos do YouTube indisponível.') from None
+    found=[]
+    for item in (results or {}).get('entries') or []:
+        if not isinstance(item, dict):
             continue
-        url = 'https://www.youtube.com/watch?v=' + vid
-        meta = youtube_metadata(url)
-        if 'gta' not in (meta['title'] + meta['description']).lower():
+        vid=item.get('id')
+        if not isinstance(vid, str) or not re.fullmatch(r'[A-Za-z0-9_-]{11}', vid):
             continue
-        score = viral_score(meta)
-        db.execute('''INSERT INTO opportunities VALUES (:id,:url,'youtube',:title,:metadata,:score,:now,:profile)
-            ON CONFLICT(url) DO UPDATE SET metadata=excluded.metadata, score=excluded.score''',
-            dict(id=db.uid(), url=url, title=meta['title'], metadata=json.dumps(meta), score=score,
-                 now=time.time(), profile=profile['id'] if profile else None))
+        if any('/shorts/' in str(item.get(k) or '') for k in ('url','webpage_url','original_url')):
+            continue  # Managed by the high-priority Shorts scanner.
+        title=str(item.get('title') or '')[:300]
+        description=str(item.get('description') or '')[:4000]
+        if not re.search(r'gta\s*(6|vi)|grand theft auto',title+' '+description,re.I):
+            continue
+        url='https://www.youtube.com/watch?v='+vid
+        meta={'url':url,'platform':'youtube','format':'video','title':title,'description':description,
+              'source_profile':item.get('uploader'), 'duration':item.get('duration'),
+              'published':None,'metrics':{},'rights':'REFERENCE_ONLY',
+              'discovery':'public_youtube_videos','collected_at':time.time()}
+        db.execute("""INSERT INTO opportunities VALUES (:id,:url,'youtube',:title,:meta,NULL,:now,:profile)
+            ON CONFLICT(url) DO UPDATE SET metadata=excluded.metadata, title=excluded.title""",
+            {'id':db.uid(),'url':url,'title':title,'meta':json.dumps(meta,ensure_ascii=False),
+             'now':time.time(),'profile':profile['id'] if profile else None})
         found.append(url)
     return found
+
+
+def discover(profile=None):
+    """All available source families; prefer YouTube Shorts, then full videos.
+
+    Connected Instagram/TikTok monitoring requires official access to the user's
+    own account. News feeds run independently via source jobs, not this function.
+    """
+    if profile and profile['platform'] in ('instagram','tiktok'):
+        from backend.sources import connected_profile
+        return [v['url'] for v in connected_profile(profile)]
+    found=[]
+    errors=[]
+    for adapter in (public_youtube_discover,public_youtube_videos):
+        try:
+            found.extend(adapter(profile))
+        except IntegrationError as exc:
+            errors.append(str(exc))
+    if errors:
+        db.log_event(None,'cacador','WARN', ' | '.join(errors)[:580])
+    if not found and errors:
+        raise IntegrationError('Consultas YouTube indisponíveis. Fontes RSS continuam independentes.')
+    return list(dict.fromkeys(found))
 
 
 def download_authorized(video):
@@ -149,40 +294,70 @@ def llm(agent, video_id, payload, output_schema, images=None):
         raise IntegrationError(f'Configure o modelo do agente {agent}.')
     system = (db.Path(__file__).resolve().parent.parent / 'agents' / agent / 'system.md').read_text('utf-8')
     prompt = json.dumps({'input': payload, 'output_json_schema': output_schema}, ensure_ascii=False)
-    # Reserve the upper bound before the call. Failed requests retain their reservation.
-    reservation = len(prompt) + len(system) + route.max_tokens + len(images or []) * 1500
+    # Estimate input tokens from characters rather than treating every character
+    # as a token. Reserve atomically to keep concurrent workers under the cap.
+    # Reconcile against provider-reported usage whenever available.
+    estimated_input = math.ceil((len(prompt) + len(system)) / 4) + len(images or []) * 1500
+    reservation = estimated_input + route.max_tokens
     cost = reservation * config.cost_per_million / 1_000_000
+    day = db.today()
+
     def reserve():
         with db.transaction() as c:
-            usage = c.execute(text('SELECT * FROM usage WHERE day=:day'), {'day': db.today()}).mappings().first()
-            if usage and (usage['tokens'] + reservation > config.daily_tokens or usage['cost'] + cost > config.daily_cost_usd):
-                raise IntegrationError('Orçamento diário de IA atingido.')
-            if reservation > config.daily_tokens or cost > config.daily_cost_usd:
-                raise IntegrationError('Requisição excede orçamento diário de IA.')
-            c.execute(text('INSERT INTO usage VALUES (:day,:tokens,:cost) ON CONFLICT(day) DO UPDATE SET tokens=tokens+:tokens,cost=cost+:cost'),
-                      dict(day=db.today(), tokens=reservation, cost=cost))
+            usage = c.execute(text('SELECT * FROM usage WHERE day=:day'), {'day': day}).mappings().first()
+            used_tokens = usage['tokens'] if usage else 0
+            used_cost = usage['cost'] if usage else 0
+            if used_tokens + reservation > config.daily_tokens or used_cost + cost > config.daily_cost_usd:
+                raise IntegrationError(
+                    f'Orçamento diário interno do Studio atingido: {used_tokens} tokens contabilizados '
+                    f'de {config.daily_tokens} permitidos. Ajuste em Configurações > Tokens por dia; '
+                    'isso não altera as quotas reais do OmniRoute.')
+            c.execute(text('INSERT INTO usage VALUES (:day,:tokens,:cost) ON CONFLICT(day) '
+                           'DO UPDATE SET tokens=tokens+:tokens,cost=cost+:cost'),
+                      dict(day=day, tokens=reservation, cost=cost))
+
+    def reconcile(actual_tokens):
+        # Keep reservation when provider omits usage; only refund when certain.
+        if actual_tokens is None:
+            return
+        actual_tokens = max(0, int(actual_tokens))
+        actual_cost = actual_tokens * config.cost_per_million / 1_000_000
+        with db.transaction() as c:
+            c.execute(text('UPDATE usage SET tokens=MAX(0,tokens+:delta), '
+                           'cost=MAX(0,cost+:cost_delta) WHERE day=:day'),
+                      {'delta': actual_tokens-reservation, 'cost_delta': actual_cost-cost, 'day': day})
     headers = {'Authorization': 'Bearer ' + (db.secret('llm_api_key') or 'ollama')}
     # Stateless request: no shared conversation or filesystem tools.
     last = None
     for model in dict.fromkeys([route.model, route.fallback_model]):
         if not model:
             continue
-        reserve()
         content = prompt
         if images:
             if not route.vision:
-                raise IntegrationError('Modelo do Avaliador não está habilitado para visão.')
+                raise IntegrationError('Modelo do agente não está habilitado para visão.')
             content = [{'type': 'text', 'text': prompt}] + [{'type': 'image_url', 'image_url': {
                 'url': 'data:image/jpeg;base64,' + base64.b64encode(path.read_bytes()).decode(), 'detail': 'low'}} for path in images]
+        reserve()
         try:
             r = request('POST', config.provider_url + '/chat/completions', headers=headers, json={
                 'model': model, 'messages': [{'role': 'system', 'content': system}, {'role': 'user', 'content': content}],
                 'max_tokens': route.max_tokens, 'temperature': .3, 'response_format': {'type': 'json_object'}}).json()
             result = json.loads(r['choices'][0]['message']['content'])
             used = r.get('usage', {}).get('total_tokens')
-            db.log_event(video_id, agent, 'MODEL', 'Resposta estruturada recebida; reserva conservadora de orçamento.', used or 0)
+            reconcile(used if isinstance(used, int) and used >= 0 else None)
+            db.log_event(video_id, agent, 'MODEL', 'Resposta estruturada recebida; consumo conciliado quando informado.', used or 0)
             return result
-        except (IntegrationError, ValueError, KeyError, IndexError) as exc:
+        except IntegrationError as exc:
+            # An upstream HTTP rejection has no completed generation. Don't
+            # permanently consume the Studio budget on 401/403/429, etc.
+            if any(str(exc).startswith(f'Integração respondeu HTTP {status}')
+                   for status in (400, 401, 403, 404, 422, 429)):
+                reconcile(0)
+            last = exc
+        except (ValueError, KeyError, IndexError) as exc:
+            # Malformed responses may already have consumed tokens; retain the
+            # reservation when billing information cannot be trusted.
             last = exc
     raise IntegrationError(f'Falha do modelo de {agent}; resposta indisponível ou inválida.') from last
 

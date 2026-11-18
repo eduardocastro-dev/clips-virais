@@ -102,3 +102,19 @@ def connected_profile(profile):
         item['metrics']={k:v for k,v in item['metrics'].items() if v is not None}
         store_opportunity(item,profile['id']);valid.append(item)
     return valid
+
+
+def seed_default_sources():
+    """Idempotent public-news RSS defaults; stored under existing schema."""
+    from urllib.parse import urlencode
+    presets = (
+        ('Google News · GTA VI (EN)', 'GTA 6 OR "Grand Theft Auto VI"', 'en-US', 'US', 'US:en'),
+        ('Google News · GTA 6 (BR)', 'GTA 6 OR "Grand Theft Auto VI"', 'pt-BR', 'BR', 'BR:pt-419'),
+        ('Google News · GTA 6 Gameplay', 'GTA 6 gameplay OR GTA VI trailer', 'en-US', 'US', 'US:en'),
+        ('Google News · Rockstar Oficial', 'site:rockstargames.com GTA VI', 'en-US', 'US', 'US:en'),
+    )
+    for name, query, hl, gl, ceid in presets:
+        url = 'https://news.google.com/rss/search?' + urlencode({'q': query, 'hl': hl, 'gl': gl, 'ceid': ceid})
+        db.execute("""INSERT OR IGNORE INTO sources (id,url,name,enabled,interval_minutes,last_checked,error)
+            VALUES (:id,:url,:name,1,180,NULL,NULL)""",
+            {'id': db.uid(), 'url': url, 'name': name})

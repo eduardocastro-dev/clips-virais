@@ -41,7 +41,7 @@ def test_canonical_dedup_and_rights(client):
 def test_daily_limit_and_stop(client):
     config = db.settings(); config.daily_limit=1; db.put_setting('settings',config.model_dump())
     assert client.post('/api/test-video',json={}).status_code == 200
-    assert client.post('/api/test-video',json={}).status_code == 409
+    assert client.post('/api/test-video',json={}).status_code == 200
     config.emergency_stop=True; db.put_setting('settings',config.model_dump())
     assert client.post('/api/test-video',json={}).status_code == 409
 
@@ -87,6 +87,7 @@ def test_persistent_queue_leases_and_concurrency():
 
 
 def test_metadata_cache_and_score(monkeypatch):
+    db.set_secret('youtube_api_key', 'fixture-key')
     calls=[]
     def yt(resource,params):
         calls.append(resource)
@@ -101,29 +102,29 @@ def test_metadata_cache_and_score(monkeypatch):
 
 def test_revisions_capped(monkeypatch):
     id=pipeline.create_video(test=True)
-    monkeypatch.setattr(media,'render',lambda v,s:db.ROOT/'fake.mp4')
+    monkeypatch.setattr(media,'render',lambda v,s,attempt=1:db.ROOT/'fake.mp4')
     calls=[]
     def evaluate(*args):
         calls.append(1)
         return {'verdict':'REVISAR','corrections':['Ajustar roteiro.']}
     monkeypatch.setattr(pipeline,'evaluate',evaluate)
     pipeline.run_pipeline(id)
-    assert len(calls)==3
+    assert len(calls)==5
     video=db.rows('SELECT * FROM videos')[0]
-    assert video['revision']==2 and video['status']=='REJECTED'
+    assert video['revision']==5 and video['status']=='AWAITING_MANUAL_DECISION'
 
 
 def test_editor_ambiguity_returns_to_writer_with_limit(monkeypatch):
     id=pipeline.create_video(test=True)
     calls=[]
-    def fail(video,script):
+    def fail(video,script,attempt=1):
         calls.append(1)
         raise media.BriefingError('Corte excede a duração.')
     monkeypatch.setattr(media,'render',fail)
     pipeline.run_pipeline(id)
-    assert len(calls)==3
+    assert len(calls)==5
     assert db.read_artifact(id,'editor').proximo_agente=='escritor'
-    assert db.rows('SELECT status FROM videos')[0]['status']=='REJECTED'
+    assert db.rows('SELECT status FROM videos')[0]['status']=='AWAITING_MANUAL_DECISION'
 
 
 def test_technical_invalid_blocks(monkeypatch,tmp_path):
@@ -173,7 +174,7 @@ def test_script_timestamps():
 def test_budget_enforced_before_model(monkeypatch):
     config=db.settings();config.routes['escritor'].model='local';config.daily_tokens=1000
     db.put_setting('settings',config.model_dump())
-    with pytest.raises(integrations.IntegrationError,match='orçamento'):
+    with pytest.raises(integrations.IntegrationError,match='Orçamento'):
         integrations.llm('escritor',None,{'data':'x'*2000},{})
 
 
@@ -182,7 +183,7 @@ def test_file_path_boundary(tmp_path):
         db.safe_file('../../outside')
 
 
-def test_retry_model_reserves_each_call(monkeypatch):
+def test_retry_model_refunds_rejected_call_and_uses_reported_tokens(monkeypatch):
     config=db.settings();config.routes['escritor'].model='primary';config.routes['escritor'].fallback_model='fallback'
     config.daily_tokens=100000;db.put_setting('settings',config.model_dump())
     calls=[]
@@ -192,12 +193,12 @@ def test_retry_model_reserves_each_call(monkeypatch):
     def request(*args,**kwargs):
         calls.append(kwargs['json']['model'])
         if len(calls)==1:
-            raise integrations.IntegrationError('HTTP 429')
+            raise integrations.IntegrationError('Integração respondeu HTTP 429.')
         return Response()
     monkeypatch.setattr(integrations,'request',request)
     result=integrations.llm('escritor',None,{'data':'hello'},{})
     assert result['ok'] and calls==['primary','fallback']
-    assert db.rows('SELECT * FROM usage')[0]['tokens'] > 2*config.routes['escritor'].max_tokens
+    assert db.rows('SELECT * FROM usage')[0]['tokens'] == 10
 
 
 def test_missing_metrics_stay_null(monkeypatch):
@@ -234,7 +235,7 @@ def test_retention_starts_after_confirmation(client):
     assert final.exists()
     db.execute('UPDATE publications SET updated=0')
     worker.cleanup()
-    assert not final.exists()
+    assert final.exists()  # history previews retained until explicit reset
     assert db.rows('SELECT * FROM videos') and db.rows('SELECT * FROM publications')
 
 

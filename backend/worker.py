@@ -8,12 +8,24 @@ import time
 from email.message import EmailMessage
 from backend import core as db
 from backend.integrations import IntegrationError, discover, collect_metrics, request
-from backend.pipeline import run_pipeline, create_video, daily_report
+from backend.pipeline import run_pipeline, create_video, daily_report, PipelineInterrupted
 from backend.contracts import ImportRequest
-from backend.distribution import reconcile_postiz, collect_postiz_metrics
-from backend.sources import scan_feed
+from backend.sources import scan_feed, seed_default_sources
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
+
+
+
+def catalog_discovered_shorts():
+    """Catalog only: metadata for third-party clips does not grant download rights."""
+    from backend.assets import register_short
+    for row in db.rows("SELECT metadata FROM opportunities WHERE platform='youtube' ORDER BY created DESC LIMIT 150"):
+        try:
+            meta=json.loads(row['metadata'])
+            if meta.get('format')=='short' or '/shorts/' in meta.get('url',''):
+                register_short(meta)
+        except (ValueError,KeyError,TypeError):
+            continue
 
 
 def cleanup():
@@ -23,7 +35,7 @@ def cleanup():
         pending = db.rows("SELECT id FROM publications WHERE video_id=:id AND status!='PUBLICADO'", {'id': v['id']})
         recent = db.rows('SELECT id FROM publications WHERE video_id=:id AND updated>:cutoff', dict(id=v['id'],cutoff=cutoff))
         preserve_final = bool(pending or recent)
-        for root in ['videos/raw', 'videos/processing'] + ([] if preserve_final else ['videos/final']):
+        for root in ['videos/raw', 'videos/processing']:
             target = (db.ROOT / root / (v['id'] if root.endswith('processing') else v['id'] + '.mp4')).resolve()
             allowed = (db.ROOT / root).resolve()
             if target.is_relative_to(allowed) and not target.is_symlink():
@@ -37,6 +49,10 @@ def cleanup():
                     target = (db.ROOT / p['output_path']).resolve()
                     if target.is_relative_to((db.ROOT / 'output').resolve()) and target.is_file():
                         target.unlink()
+    from backend import production_media
+    production_media.prune_stale(db.settings().temporary_retention_days)
+    from backend.uploads import prune_sessions
+    prune_sessions(db.settings().temporary_retention_days)
     db.execute('DELETE FROM cache WHERE expires<:now', {'now': time.time()})
 
 
@@ -79,9 +95,6 @@ def scheduler():
     now = time.time()
     if config.emergency_stop:
         return
-    if config.postiz_url and now - db.get_setting('last_reconcile',0) >= 300:
-        db.enqueue('reconcile',unique_key=f'reconcile:{int(now//300)}')
-        db.put_setting('last_reconcile',now)
     last = db.get_setting('maintenance', 0)
     if now - last > 3600:
         db.enqueue('maintenance', unique_key=f'maintenance:{int(now // 3600)}')
@@ -95,18 +108,48 @@ def scheduler():
     if now - last >= config.search_minutes * 60:
         db.enqueue('discover', unique_key=f'discover:{int(now // (config.search_minutes * 60))}')
         db.put_setting('last_search', now)
-    for profile in db.rows('SELECT * FROM profiles WHERE enabled=1'):
+    for profile in db.rows("SELECT * FROM profiles WHERE enabled=1"):
         if now - (profile['last_checked'] or 0) > profile['interval_minutes'] * 60:
             db.enqueue('profile:' + profile['id'], unique_key=f'profile:{profile["id"]}:{int(now // (profile["interval_minutes"]*60))}')
-    for source in db.rows('SELECT * FROM sources WHERE enabled=1'):
-        if now-(source['last_checked'] or 0)>source['interval_minutes']*60:
-            db.enqueue('source:'+source['id'],unique_key=f'source:{source["id"]}:{int(now//(source["interval_minutes"]*60))}')
+    for source in db.rows("SELECT * FROM sources WHERE enabled=1"):
+        if now - (source['last_checked'] or 0) >= source['interval_minutes'] * 60:
+            db.enqueue('source:' + source['id'],
+                       unique_key=f'source:{source["id"]}:{int(now // (source["interval_minutes"]*60))}')
+
+
+def prioritized_opportunities(limit=150):
+    # Strong preference for Shorts; never hide longer YouTube videos or RSS.
+    return db.rows("""SELECT * FROM opportunities
+        ORDER BY CASE
+          WHEN platform='youtube' AND url LIKE 'https://www.youtube.com/shorts/%' THEN 0
+          WHEN platform='youtube' THEN 1
+          WHEN platform='news' THEN 2
+          ELSE 3 END,
+          COALESCE(score, -1) DESC, created DESC LIMIT :limit""", {'limit':limit})
+
+
+def queue_opportunities():
+    for opportunity in prioritized_opportunities(limit=30):
+        if db.rows('SELECT id FROM videos WHERE url=:url', {'url':opportunity['url']}):
+            continue
+        try:
+            if opportunity['platform']=='news':
+                create_video(reference=json.loads(opportunity['metadata']))
+            else:
+                recommended=db.get_setting('recommendations', {}).get('template') or 'gta-news'
+                create_video(ImportRequest(url=opportunity['url'],duration=db.settings().duration,template=recommended))
+        except ValueError:
+            # Daily limit applies across all sources; no infinite retries.
+            break
 
 
 def perform(job):
     kind = job['kind']
     if kind == 'pipeline':
         run_pipeline(job['video_id'])
+    elif kind.startswith('split:'):
+        from backend.clips import split_asset
+        split_asset(kind.split(':',1)[1])
     elif kind == 'discover' or kind.startswith('profile:'):
         profile = None
         if kind.startswith('profile:'):
@@ -116,45 +159,37 @@ def perform(job):
             profile = results[0]
         try:
             discover(profile)
+            catalog_discovered_shorts()
             if profile:db.execute('UPDATE profiles SET error=NULL WHERE id=:id',{'id':profile['id']})
         finally:
             if profile:
                 db.execute('UPDATE profiles SET last_checked=:now WHERE id=:id', dict(now=time.time(), id=profile['id']))
         if db.settings().automatic:
-            for opportunity in db.rows('SELECT * FROM opportunities ORDER BY score DESC LIMIT 20'):
-                if db.rows('SELECT id FROM videos WHERE url=:url', {'url': opportunity['url']}):
-                    continue
-                try:
-                    if opportunity['platform']=='news':
-                        create_video(reference=json.loads(opportunity['metadata']))
-                    else:
-                        recommendation=db.get_setting('recommendations',{}).get('template') or 'gta-news'
-                        create_video(ImportRequest(url=opportunity['url'], duration=db.settings().duration,template=recommendation))
-                except ValueError:
-                    break
+            queue_opportunities()
     elif kind == 'maintenance':
         cleanup()
-        collect_metrics()
-        if db.settings().postiz_url:collect_postiz_metrics()
+        # Publicação manual não requer API YouTube; métricas só quando a chave
+        # opcional de leitura estiver presente (sem OAuth de postagem).
+        if db.secret('youtube_api_key'):
+            collect_metrics()
         daily_report()
         db.notify('daily:' + db.today(), 'Resumo atualizado em reports/' + db.today() + '.md')
     elif kind == 'reconcile':
-        reconcile_postiz()
+        # Job herdado da versão Postiz: desativado de forma segura.
+        return
     elif kind.startswith('source:'):
-        found=db.rows('SELECT * FROM sources WHERE id=:id',{'id':kind.split(':')[1]})
-        if not found or not found[0]['enabled']:return
-        source=found[0]
+        source_id=kind.split(':', 1)[1]
+        found=db.rows('SELECT * FROM sources WHERE id=:id', {'id':source_id})
+        if not found or not found[0]['enabled']:
+            return
         try:
-            urls=scan_feed(source)
-            db.execute('UPDATE sources SET error=NULL WHERE id=:id',{'id':source['id']})
-            if db.settings().automatic:
-                for url in urls:
-                    try:
-                        opportunity=db.rows('SELECT metadata FROM opportunities WHERE url=:url',{'url':url})[0]
-                        create_video(reference=json.loads(opportunity['metadata']))
-                    except ValueError:break
+            scan_feed(found[0])
+            db.execute('UPDATE sources SET error=NULL WHERE id=:id', {'id':source_id})
         finally:
-            db.execute('UPDATE sources SET last_checked=:now WHERE id=:id',dict(id=source['id'],now=time.time()))
+            db.execute('UPDATE sources SET last_checked=:now WHERE id=:id',
+                       {'id':source_id,'now':time.time()})
+        if db.settings().automatic:
+            queue_opportunities()
     else:
         raise ValueError('Tipo de job desconhecido.')
 
@@ -178,6 +213,8 @@ def tick():
     try:
         perform(job)
         db.execute("UPDATE jobs SET status='DONE',lease=NULL,error=NULL WHERE id=:id", {'id': job['id']})
+    except PipelineInterrupted:
+        db.execute("UPDATE jobs SET status='DONE',lease=NULL,error=NULL WHERE id=:id",{'id':job['id']})
     except Exception as exc:
         message = str(exc)[:500] if isinstance(exc, (IntegrationError, ValueError)) else 'Erro interno; consulte o log local.'
         attempts = job['attempts'] + 1
@@ -185,7 +222,7 @@ def tick():
         db.execute('UPDATE jobs SET status=:status,due=:due,lease=NULL,error=:error WHERE id=:id',
                    dict(id=job['id'], status='FAILED' if failed else 'QUEUED', due=time.time()+min(1800, 30*2**attempts), error=message))
         if job['video_id']:
-            db.execute('UPDATE videos SET status=:status,error=:error,updated=:now WHERE id=:id',
+            db.execute("UPDATE videos SET status=:status,error=:error,updated=:now WHERE id=:id AND manual_decision IS NULL",
                        dict(id=job['video_id'], status='FAILED' if failed else 'RETRY', error=message, now=time.time()))
             db.log_event(job['video_id'], 'worker', 'ERROR', message)
         if job['kind'].startswith('profile:'):
@@ -202,6 +239,7 @@ def tick():
 
 def main():
     db.init_db()
+    seed_default_sources()
     if '--health' in sys.argv:
         sys.exit(0 if time.time() - db.get_setting('worker_heartbeat', 0) < 120 else 1)
     while True:

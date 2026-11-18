@@ -1,3 +1,12 @@
+# Estado da atualização Docker compartilhada (18/11/2026)
+
+A homologação histórica abaixo foi feita **antes** da unificação de PostgreSQL/Redis.
+A entrega desta atualização verificou: compilação sintática Python, validade estrutural YAML/volumes/dependências, parse do `start.sh` e **7 testes isolados** para segredos, bootstrap OmniRoute, preservação de configurações e guardas de migração. Os 7 testes usaram um *shim de importação* de `feedparser`, porque a dependência externa e o Docker CLI não estão presentes neste ambiente. Portanto, **não equivalem a rodar a suíte completa com dependências reais**. O Docker Compose não pôde ser iniciado ou homologado aqui, e nenhuma migração de volumes reais, Postiz, OmniRoute, FFmpeg ou integração OAuth foi executada nesta atualização.
+
+Para homologação real na máquina do usuário: `docker compose config`, `docker compose ps`, `docker compose logs bootstrap`, `docker compose exec api python -m backend.doctor`, testes do perfil `test` e validação funcional manual das aplicações. Consulte `docs/MIGRATION.md` antes de apontar a topologia nova para volumes legados.
+
+---
+
 # Homologação executada
 
 Ambiente: Windows, Python 3.13, Node 26 local, Docker Desktop Linux 29.7.2, Compose 5.5.0. Imagens: Python 3.13-slim e Node 22-alpine. Horários da aplicação: America/Sao_Paulo.

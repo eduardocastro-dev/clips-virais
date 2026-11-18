@@ -14,7 +14,7 @@ from backend.contracts import Settings, Handoff
 ROOT = Path(os.getenv('STUDIO_FILES', '.')).resolve()
 DATA = Path(os.getenv('STUDIO_DATA', str(ROOT / 'data'))).resolve()
 DATA.mkdir(parents=True, exist_ok=True)
-for folder in ['handoff', 'videos/raw', 'videos/processing', 'videos/final', 'output', 'reports', 'cache', 'logs']:
+for folder in ['handoff', 'videos/raw', 'videos/processing', 'videos/final', 'output', 'reports', 'cache', 'logs', 'assets/shorts', 'assets/gameplay', 'assets/images', 'assets/persona', 'assets/clips', 'assets/uploads/video', 'assets/uploads/audio', 'assets/uploads/image', 'assets/uploads/font', 'assets/uploads/subtitle', 'assets/uploads/logo', 'temp']:
     (ROOT / folder).mkdir(parents=True, exist_ok=True)
 engine = create_engine('sqlite:///' + str(DATA / 'studio.sqlite'), connect_args={'timeout': 30})
 
@@ -66,15 +66,66 @@ def init_db():
         status TEXT, summary TEXT, tokens INTEGER DEFAULT 0, created REAL)''',
         'CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, value TEXT, expires REAL)',
         'CREATE TABLE IF NOT EXISTS usage (day TEXT PRIMARY KEY, tokens INTEGER, cost REAL)',
+        """CREATE TABLE IF NOT EXISTS assets (
+            id TEXT PRIMARY KEY, kind TEXT NOT NULL, source_id TEXT, url TEXT,
+            title TEXT, channel TEXT, source_class TEXT NOT NULL, rights_status TEXT NOT NULL,
+            evidence TEXT, path TEXT, status TEXT NOT NULL, metadata TEXT,
+            duration REAL, created REAL, updated REAL, error TEXT,
+            UNIQUE(kind,source_id))""",
+        """CREATE TABLE IF NOT EXISTS upload_sessions (
+            id TEXT PRIMARY KEY, filename TEXT NOT NULL, size_bytes INTEGER NOT NULL,
+            received INTEGER NOT NULL DEFAULT 0, state TEXT NOT NULL, category TEXT,
+            tags TEXT, source_class TEXT, evidence TEXT, media_type TEXT,
+            sha256 TEXT, updated REAL, created REAL, error TEXT)""",
+        '''CREATE TABLE IF NOT EXISTS video_attempts (video_id TEXT NOT NULL, attempt INTEGER NOT NULL,
+        verdict TEXT NOT NULL, score REAL, details TEXT NOT NULL, render_path TEXT, render_error TEXT,
+        created REAL NOT NULL, PRIMARY KEY(video_id,attempt),
+        FOREIGN KEY(video_id) REFERENCES videos(id))''',
     ]
     with engine.begin() as c:
+        old_version=int(c.exec_driver_sql('PRAGMA user_version').scalar() or 0)
         for sql in statements:
             c.execute(text(sql))
         columns = {r[1] for r in c.exec_driver_sql('PRAGMA table_info(publications)')}
         for name, typ in [('provider','TEXT'),('remote_id','TEXT'),('scheduled_for','REAL')]:
             if name not in columns:
                 c.exec_driver_sql(f'ALTER TABLE publications ADD COLUMN {name} {typ}')
-        c.execute(text('PRAGMA user_version=2'))
+        video_cols={r[1] for r in c.exec_driver_sql('PRAGMA table_info(videos)')}
+        for name, typ in [('approved_at','REAL'),('manual_decision','TEXT'),('manual_by','TEXT'),
+                          ('manual_at','REAL'),('render_error','TEXT')]:
+            if name not in video_cols:
+                c.exec_driver_sql(f'ALTER TABLE videos ADD COLUMN {name} {typ}')
+        asset_cols={r[1] for r in c.exec_driver_sql('PRAGMA table_info(assets)')}
+        for name,typ in [('category','TEXT'),('tags',"TEXT DEFAULT '[]'"),('active','INTEGER DEFAULT 1'),
+                         ('parent_id','TEXT'),('clip_index','INTEGER'),('clip_total','INTEGER'),
+                         ('usage_count','INTEGER DEFAULT 0'),('sha256','TEXT'),('media_type','TEXT'),
+                         ('size_bytes','INTEGER')]:
+            if name not in asset_cols:c.exec_driver_sql(f'ALTER TABLE assets ADD COLUMN {name} {typ}')
+        c.exec_driver_sql('CREATE INDEX IF NOT EXISTS idx_assets_parent ON assets(parent_id)')
+        c.exec_driver_sql('CREATE INDEX IF NOT EXISTS idx_assets_tags ON assets(category,active,usage_count)')
+        if old_version < 3:
+            # Repair previews for legacy rejected videos, whose MP4 existed but
+            # whose final_path was written only on evaluator approval.
+            for v in c.execute(text('SELECT id,final_path FROM videos')).mappings():
+                legacy=ROOT/'videos/final'/(v['id']+'.mp4')
+                if not v['final_path'] and legacy.is_file():
+                    c.execute(text('UPDATE videos SET final_path=:path WHERE id=:id'),
+                              {'path':str(legacy.relative_to(ROOT)),'id':v['id']})
+                handoffs=ROOT/'handoff'/v['id']
+                for old in sorted(handoffs.glob('review-*.json')):
+                    try:
+                        n=int(old.stem.rsplit('-',1)[-1])+1  # old index was zero based
+                        details=json.loads(old.read_text('utf-8'))
+                        details.setdefault('reason_full','\n'.join(details.get('corrections',[])) or details.get('summary','Sem motivo registrado.'))
+                    except (ValueError,TypeError,json.JSONDecodeError):
+                        continue
+                    path=str(legacy.relative_to(ROOT)) if legacy.is_file() and n==max(1,len(list(handoffs.glob('review-*.json')))) else None
+                    c.execute(text('''INSERT OR IGNORE INTO video_attempts
+                       (video_id,attempt,verdict,score,details,render_path,render_error,created)
+                       VALUES (:id,:n,:verdict,:score,:details,:path,NULL,:created)'''),
+                       {'id':v['id'],'n':n,'verdict':details.get('verdict','LEGADO'),'score':details.get('score'),
+                        'details':json.dumps(details,ensure_ascii=False),'path':path,'created':legacy.stat().st_mtime if legacy.exists() else time.time()})
+        c.execute(text('PRAGMA user_version=3'))
 
 
 def rows(sql, params=None):
@@ -192,3 +243,27 @@ def safe_file(relative):
     if not path.is_relative_to(ROOT) or not path.is_file():
         raise ValueError('Arquivo inexistente ou fora do diretório permitido.')
     return path
+
+
+def local_day_bounds():
+    from datetime import datetime, time as dtime, timedelta
+    zone=ZoneInfo('America/Sao_Paulo')
+    start=datetime.combine(datetime.now(zone).date(),dtime.min,tzinfo=zone)
+    return start.timestamp(), (start+timedelta(days=1)).timestamp()
+
+
+def production_usage(connection=None):
+    """One row per real production. Revisions and tests never count twice.
+
+    Active real jobs hold a slot; approvals count on approval day. Rejected,
+    failed and discarded work releases the slot. No legacy kv daily counter.
+    """
+    begin,end=local_day_bounds()
+    statement=text("""SELECT COUNT(*) FROM videos WHERE test=0 AND (
+        (status IN ('QUEUED','PROCESSING','RETRY') AND created>=:start AND created<:end)
+        OR (status='APPROVED' AND COALESCE(approved_at,created)>=:start AND COALESCE(approved_at,created)<:end)
+    )""")
+    if connection is not None:
+        return int(connection.execute(statement,{'start':begin,'end':end}).scalar() or 0)
+    with engine.connect() as c:
+        return int(c.execute(statement,{'start':begin,'end':end}).scalar() or 0)

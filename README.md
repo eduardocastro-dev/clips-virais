@@ -1,29 +1,40 @@
+# Modo simplificado: pesquisa + edição + publicação manual
+
+**Esta edição usa o OmniRoute existente, RSS gratuito e pesquisa pública de vídeos para criar MP4 e metadados. Não inicia Postiz nem publica nas redes.** Consulte [docs/MODO-MANUAL.md](docs/MODO-MANUAL.md) antes da atualização. A documentação antiga abaixo é histórica e pode mencionar serviços opcionais já removidos da pilha ativa.
+
+---
+
 # GTA 6 Autonomous Content Studio
 
 Estúdio pessoal self-hosted com painel Next.js, API FastAPI, SQLite WAL e worker persistente. Produz vídeos verticais PT-BR com fontes rastreáveis, cinco etapas especializadas, FFmpeg/Piper e distribuição manual. Upload privado no YouTube é implementado pela API oficial e depende de OAuth e aprovação audiovisual. **YouTube, TikTok e Instagram podem usar o adaptador Postiz configurado; todas as redes têm fila manual. Nenhuma integração foi homologada com contas reais.**
 
-## Iniciar
+## Iniciar — pacote Docker integrado
 
-Pré-requisitos: Docker Desktop em modo Linux, Docker Compose e espaço para imagens/modelos. Recomendado: 4 núcleos, 8 GB de RAM e 10 GB livres. O limite de produção interrompe novas descobertas quando há menos de 2 GB disponíveis.
+Pré-requisitos: Docker Desktop com containers Linux / Docker Compose v2. O conjunto integrado Postiz + Temporal/Elasticsearch + OmniRoute é mais pesado que o estúdio isolado: recomendo 4 CPUs, 12–16 GB de RAM e espaço livre de pelo menos 20 GB, conforme volume de mídias.
 
 ```powershell
-# Uma .env local já foi criada durante a instalação; não a sobrescreva.
-# Em uma instalação nova:
-Copy-Item .env.example .env
-# Edite STUDIO_TOKEN com uma senha aleatória longa.
-docker compose up -d --build
+# Na pasta do projeto (PowerShell). Não é necessário copiar .env.example:
+.\start.ps1
+# Linux:
+# sh start.sh
+
 docker compose ps
+docker compose logs --tail=80 bootstrap
+# Diagnóstico das chaves e endpoints, sem publicar:
+docker compose exec api python -m backend.doctor
 ```
 
-Abra [http://localhost:3000](http://localhost:3000). Informe o valor de `STUDIO_TOKEN` da sua `.env`. Não coloque esse token em URLs, commits ou serviços externos. API: [http://localhost:8000/docs](http://localhost:8000/docs). As rotas de dados exigem `Authorization: Bearer <token>`.
+O instalador cria `.env` com segredos aleatórios e preserva valores existentes. **Nunca versionar nem compartilhar `.env`**. Acesse Estúdio em http://localhost:3000 (token `STUDIO_TOKEN` no `.env`), Postiz em http://localhost:4007 e OmniRoute em http://localhost:20128. Postiz e OmniRoute recebem usuários/senhas locais pelo bootstrap, mas autorização OAuth das redes e conexão a provedores de IA ainda são manuais.
 
-O Docker mantém banco, chave criptográfica, handoffs e mídias no volume `clips-virais_studio`. Não execute `down -v` se quiser preservar o histórico. As portas estão vinculadas apenas a `127.0.0.1`. Para servidor remoto, configure HTTPS e acesso privado antes de expor a aplicação.
+**Se você já iniciou a versão com PostgreSQL e Redis separados por aplicação:** não suba a nova topologia diretamente. O instalador procura os containers antigos e bloqueia o start até realizar a migração. Consulte [docs/MIGRATION.md](docs/MIGRATION.md) e execute `python scripts/migrate_shared.py` na pasta original, com os volumes antigos intactos.
+
+Portas expostas somente em loopback. Para VPS, use túnel SSH e um proxy HTTPS devidamente configurado antes de abrir OAuth/callbacks. **Não execute `docker compose down -v`** em ambiente com dados importantes.
 
 ## Primeira configuração
 
 1. Em **Configurações**, salve nome do canal, limites, duração, países, frequência, retenção e destinos.
-2. Configure uma URL compatível com OpenAI, por exemplo `http://host.docker.internal:11434/v1` para Ollama no host. Instale modelos no provedor e informe seus nomes para Escritor e Avaliador. OmniRoute usa a mesma interface. Diretor operacional, Caçador e Editor usam scripts; seus campos de modelo ficam reservados a extensões estratégicas.
-3. Salve `llm_api_key` quando o provedor exigir. Configure custo por milhão de tokens conforme sua tabela real. O controle reserva um limite conservador antes de **cada** chamada, incluindo fallback; o painel distingue reserva estimada de tokens reportados pelo provedor.
+2. Na instalação integrada, a URL do provedor é configurada automaticamente para `http://omniroute:20128/v1`; conecte as contas no painel do OmniRoute e crie o combo `studio-free` com modelos aprovados/sem custos. Em instalação independente, configure uma URL compatível com OpenAI, por exemplo `http://host.docker.internal:11434/v1` para Ollama no host. Instale modelos no provedor e informe seus nomes para Escritor e Avaliador. OmniRoute usa a mesma interface. Diretor operacional, Caçador e Editor usam scripts; seus campos de modelo ficam reservados a extensões estratégicas.
+3. O instalador gera uma `llm_api_key` restrita ao combo `studio-free` e salva criptografada; use a configuração manual apenas se conectar um provedor diferente. Configure custo por milhão de tokens conforme sua tabela real. O controle reserva um limite conservador antes de **cada** chamada, incluindo fallback; o painel distingue reserva estimada de tokens reportados pelo provedor.
 4. Coloque uma voz Piper **PT-BR** e seu `.onnx.json` em `models/`, após verificar sua licença. Ajuste `PIPER_MODEL` em `.env` e recrie API/worker. Nenhuma voz é baixada silenciosamente. Verifique o CLI Piper com `docker compose exec worker piper --help`.
 5. Opcional: habilite Faster Whisper e visão no Avaliador. Whisper baixa o modelo `small` no primeiro uso para o cache do volume. A URL de IA receberá frames se você habilitar visão. Sem esses recursos, a saída exige revisão humana.
 6. Gere um **teste técnico**. Ele usa texto e sinal de áudio sintéticos, não gasta tokens e nunca é publicado automaticamente.
@@ -60,7 +71,7 @@ Publicação manual operacional e adaptador Postiz para envio/agendamento nas co
 
 ### Postiz
 
-Execute uma instância self-hosted seguindo a documentação oficial ou conecte uma instância que você já usa. Salve a base da API em Configurações (por exemplo `http://host.docker.internal:4007/api/public/v1`) e a credencial `postiz_api_key`. Consulte os canais autorizados e associe cada rede ao seu ID. No assistente oficial do Postiz, exporte as opções específicas de cada rede e preencha o JSON por plataforma. Configure privacidade e permissões reais; a aplicação não inventa opções permitidas pelo TikTok.
+A instalação integrada inclui Postiz e tenta registrar o administrador local automaticamente. Você também pode conectar uma instância externa se preferir. Para instalações externas, salve a base da API em Configurações (por exemplo `http://host.docker.internal:4007/api/public/v1`) e a credencial `postiz_api_key`. Consulte os canais autorizados e associe cada rede ao seu ID. No assistente oficial do Postiz, exporte as opções específicas de cada rede e preencha o JSON por plataforma. Configure privacidade e permissões reais; a aplicação não inventa opções permitidas pelo TikTok.
 
 Após revisão manual, use **Planejar / enviar pelo Postiz** na publicação. O horário salvo sozinho é apenas planejamento editorial; **Enviar ao Postiz** faz upload e agenda. Para operação autônoma, habilite Postiz automático e avaliação automática com visão/transcrição. Receber `postId` muda o estado para `AGENDADO`; somente `PUBLISHED` com URL válida muda para `PUBLICADO`. A reconciliação roda a cada cinco minutos; a coleta de métricas usa cache de seis horas. Há limite conservador de 30 chamadas por hora.
 
@@ -109,7 +120,7 @@ Backup: preserve o volume inteiro, inclusive `data/secrets.key`, com os serviço
 ## Limites atuais
 
 - Homologação externa exige suas credenciais e autorização; nenhum upload real é realizado nos testes.
-- Edição por cenas e versões criativas implementadas; não há timeline de arrastar e soltar, catálogo de músicas ou Revideo. Postiz é um adaptador para instância externa, não um serviço embutido no Compose principal.
+- Edição por cenas e versões criativas implementadas; não há timeline de arrastar e soltar, catálogo de músicas ou Revideo. Postiz e OmniRoute já são serviços embutidos no Compose principal; versões anteriores exigem migração de dados.
 - Seis templates compartilham o mesmo mecanismo de corte central/cards e fades; não implementam efeitos cinematográficos complexos ou reações com avatar.
 - Descoberta YouTube, RSS/Atom e consulta de contas autorizadas TikTok/Instagram implementadas. Não há busca global irrestrita dessas duas redes nem inferência automática de direitos de terceiros.
 - Avaliação por amostragem e ASR não garante exatidão factual ou qualidade perceptual; não equivale a revisão integral. O modo textual sempre requer revisão humana.
@@ -118,3 +129,109 @@ Backup: preserve o volume inteiro, inclusive `data/secrets.key`, com os serviço
 - Configuração de pasta de saída usa o volume Docker; o painel não aceita caminhos arbitrários do host. Há migração aditiva das colunas de distribuição no SQLite; não há ferramenta geral de downgrade.
 
 O estado exato da homologação está em [docs/VALIDATION.md](docs/VALIDATION.md). Esta entrega é uma base operacional executável; os limites acima não devem ser apresentados como funcionalidades concluídas.
+
+
+## Radar multifuentes e clipes automáticos de gameplay
+
+O radar voltou a mostrar **YouTube Shorts (prioridade máxima), vídeos comuns do YouTube e notícias/RSS**, além de perfis conectados e links diretos de outras redes quando autorizados. Para mídia com licença registrada e mais de 45s, FFmpeg detecta cenas, o Escritor do OmniRoute seleciona timestamps para cortes e o Editor monta um Short de no máximo 45s. Veja [docs/RADAR-MULTIFONTES-E-CLIPES.md](docs/RADAR-MULTIFONTES-E-CLIPES.md). Publicação permanece manual.
+
+## Reset e Avaliador v3 (2026-11-18)
+
+Antes de excluir as produções, consulte [docs/RESET-AVALIADOR-V3.md](docs/RESET-AVALIADOR-V3.md).
+A nova rotina de backup está em `backup-producoes.ps1` e **não executa reset**.
+O Studio passou a preservar renders por tentativa, exibir avaliação completa, configurar 12 critérios e permitir até 5 tentativas com decisão manual.
+
+## GTA Studio v4: biblioteca / mídia temporária / persona
+
+A atualização v4 preserva o modo de postagem manual. Consulte [docs/MIDIA-TEMP-PERSONA-V4.md](docs/MIDIA-TEMP-PERSONA-V4.md) para migração dos assets, requisitos do Playwright, 3 personas, permissões, testes e retenção. Atenção: copie arquivos antigos de `/studio/assets` antes de ativar os bind mounts `./assets` e `./temp`.
+
+---
+
+## V5 — Upload de mídia e fatiamento de vídeos longos
+
+O software continua **100% com publicação manual**. Sem Postiz e sem OAuth para
+publicar. Todos os arquivos utilizados na montagem precisam ter autorização.
+
+### Atualização de uma instalação existente
+
+1. Faça backup da pasta do projeto e mantenha seu `.env`, `models/`, `assets/`,
+   `temp/` e volumes Docker. Não execute `docker compose down -v`.
+2. Extraia o **patch V5** na raiz de `Clips-Virais`, sobrescrevendo apenas o código.
+3. No PowerShell, execute:
+
+   ```powershell
+   docker compose up -d --build api worker web
+   docker compose exec api python -m backend.doctor
+   docker compose logs --tail=80 worker
+   ```
+
+4. Abra `http://localhost:3000` → **Upload de mídia**. Selecione múltiplos arquivos
+   ou arraste arquivos para a área indicada. Informe categoria, tags, classificação
+   da origem e evidência da licença. Um arquivo sem evidência permanece **pendente
+   de direitos**, portanto não é utilizado automaticamente na edição.
+5. Acesse **Biblioteca de assets** para visualizar mídia, clipes agrupados,
+   progresso de fatiamento, filtros, ativação/desativação e autorização. A exclusão
+   do original com seus clipes exige confirmação explícita.
+6. Em **Configurações**, ajuste: duração mínima para dividir (45s), tamanho dos
+   clipes (10s), último trecho mínimo (3s), tamanho máximo de upload (1024 MB)
+   e volume da música (0,12 por padrão). Alterações de tamanho não processam
+   novamente arquivos já fatiados.
+
+### Como funciona o processamento
+
+- Vídeos de até 45s são mantidos inteiros. Os maiores entram em uma tarefa
+  assíncrona `split:<id>` executada pelo Worker, com FFmpeg H.264 reencodado e
+  áudio AAC (quando presente). A proporção original é preservada.
+- Exemplo: 51 segundos → 10 + 10 + 10 + 10 + 11 segundos.
+- Mídias provenientes de Shorts, Viral Radar e importação por URL **só são
+  baixadas e fatiadas quando houver direitos de uso registrados**. A pesquisa
+  por si só guarda metadados, não copia vídeos privados ou sem autorização.
+- O upload usa blocos de 4 MB com deslocamento verificado no servidor. Se a
+  conexão cair, selecione o mesmo arquivo e clique **Retomar**; os blocos já
+  confirmados permanecem em disco. O servidor rejeita offsets incompatíveis.
+- O Studio identifica duplicatas pelo hash SHA-256 completo do arquivo.
+  Duplicatas reutilizam a entrada existente sem sobrepor direitos/metadados.
+- Na montagem, o Editor alterna trechos de aproximadamente 3s, prioriza
+  categorias/tags que coincidam com a cena e menor contagem de uso. Jamais
+  repete o mesmo clipe em dois cortes consecutivos; quando não há alternativa,
+  usa um fundo próprio. Clipes do mesmo vídeo pai são evitados quando possível.
+- Música e efeitos são opcionais; FFmpeg normaliza a narração, reduz a música
+  quando há fala (ducking) e usa um limiter na mistura final. Áudio original
+  e arquivos da biblioteca não são modificados.
+- Trechos de terceiros exigem autorização, recebem crédito visível e ficam
+  limitados a **5 segundos totais por produção** e até 4 segundos por trecho.
+  O Studio não ultrapassa esse teto automaticamente.
+- O manifesto `handoff/<id>/visual-assets-attempt-<n>.json` registra cena,
+  asset/clipe, ID pai, origem, classificação, duração e caminho de trabalho;
+  ele aparece na pré-visualização por tentativa.
+
+### Pastas do projeto
+
+| Pasta | Conteúdo |
+|---|---|
+| `assets/uploads/video/` | Originais MP4, MOV, WEBM e MKV enviados |
+| `assets/uploads/audio/` | Originais MP3, WAV e M4A |
+| `assets/uploads/image/` | Imagens PNG, JPG, WEBP e GIF |
+| `assets/uploads/font/` | TTF/OTF |
+| `assets/uploads/subtitle/` | Legendas SRT |
+| `assets/uploads/logo/` | Logos |
+| `assets/clips/<id-pai>/` | Derivados `clip_001.mp4`, `clip_002.mp4` etc. |
+| `temp/uploads/` | Arquivos de upload parcial; limpeza de sessões antigas |
+| `temp/<id-producao>/` | Cópias de trabalho temporárias |
+| `videos/final/<id>/` | MP4 renderizado por tentativa |
+
+### Testes direcionados
+
+```powershell
+# Executa a suite existente e os novos testes no Docker (sem publicar vídeos)
+docker compose --profile test run --rm tests
+
+# Se o vídeo de 51 segundos terminar, procure cinco derivados na Biblioteca
+# Abra Video Studio para ver a origem de cada corte no manifesto da cena.
+```
+
+**Limitações:** a retomada é ao selecionar novamente o mesmo arquivo no mesmo
+navegador; não é sincronizada entre dispositivos. O banco registra progresso
+em blocos e os arquivos parciais são removidos após a retenção configurada.
+O build de frontend e o end-to-end dentro do Docker precisam ser verificados
+na máquina do usuário antes de operar de modo automático.

@@ -46,7 +46,7 @@ def test_postiz_timeout_preserves_intent(monkeypatch):
 
 def test_test_video_never_sent_via_ui(client):
     pub,_,_=fixture_publication()
-    assert client.post('/api/publications/p/send',json={'reviewed':True}).status_code==409
+    assert client.post('/api/publications/p/send',json={'reviewed':True}).status_code==410
 
 
 def test_schedule_preserves_manual_status(client):

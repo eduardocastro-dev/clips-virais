@@ -5,6 +5,9 @@ WORKDIR /app
 COPY backend/requirements.txt /app/requirements.txt
 COPY backend/requirements-video.txt /app/requirements-video.txt
 RUN pip install --no-cache-dir -r requirements.txt -r requirements-video.txt
+# Chromium for optional news headline/excerpt screenshots.
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN python -m playwright install --with-deps chromium && chmod -R a+rX /ms-playwright
 COPY backend /app/backend
 COPY agents /app/agents
 COPY templates /app/templates

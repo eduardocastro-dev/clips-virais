@@ -11,17 +11,10 @@ def prepare(root: Path):
                   if '=' in line and not line.lstrip().startswith('#'))
     defaults = {
         'STUDIO_TOKEN': secrets.token_hex(32),
-        'POSTIZ_DB_PASSWORD': secrets.token_hex(32),
-        'POSTGRES_ADMIN_PASSWORD': secrets.token_hex(32),
         'REDIS_PASSWORD': secrets.token_hex(32),
-        'TEMPORAL_DB_PASSWORD': secrets.token_hex(32),
-        'POSTIZ_JWT_SECRET': secrets.token_hex(64),
         'OMNIROUTE_JWT_SECRET': secrets.token_hex(64),
         'OMNIROUTE_API_KEY_SECRET': secrets.token_hex(32),
         'OMNIROUTE_PASSWORD': secrets.token_hex(24),
-        'POSTIZ_ADMIN_PASSWORD': secrets.token_hex(24),
-        'POSTIZ_ADMIN_EMAIL': 'admin@studio.local',
-        'POSTIZ_PUBLIC_URL': 'http://localhost:4007',
         'STUDIO_TIMEZONE': 'America/Sao_Paulo',
     }
     additions = {k: v for k, v in defaults.items() if not values.get(k)}
@@ -34,6 +27,8 @@ def prepare(root: Path):
         f.write('\n'.join(lines) + '\n')
     os.replace(tmp, path)
     os.chmod(path, 0o600)
+    if os.name == 'posix' and os.getenv('HOST_UID') and os.getenv('HOST_GID'):
+        os.chown(path, int(os.environ['HOST_UID']), int(os.environ['HOST_GID']))
     print('Configuração local pronta. Segredos preservados em .env (não são exibidos nos logs).')
 
 

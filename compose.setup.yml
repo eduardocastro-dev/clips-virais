@@ -3,5 +3,8 @@ services:
     image: python:3.13-slim
     working_dir: /workspace
     command: [python, scripts/setup_stack.py]
+    environment:
+      HOST_UID: ${HOST_UID:-}
+      HOST_GID: ${HOST_GID:-}
     volumes:
       - .:/workspace

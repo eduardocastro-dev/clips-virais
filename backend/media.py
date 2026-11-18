@@ -31,7 +31,8 @@ def run(args, timeout=240, cwd=None):
     if result.returncode:
         # stderr from media programs is local, but keep it out of handoffs.
         db.atomic(db.ROOT / 'logs' / 'media-last-error.log', result.stderr.decode('utf-8', errors='replace')[-6000:])
-        raise IntegrationError('Falha de processamento de mídia; consulte media-last-error.log local.')
+        detail=result.stderr.decode('utf-8',errors='replace').strip().splitlines()[-1:]
+        raise IntegrationError('Falha no FFmpeg: '+(' '.join(detail)[:1000] if detail else 'stderr vazio')+' (log: media-last-error.log)')
     return result.stdout
 
 
@@ -56,11 +57,11 @@ def clean_subtitle(value):
     return value.replace('\\', '').replace('{', '').replace('}', '').replace('\n', ' ')
 
 
-def transcribe(path):
+def transcribe(path, auto_language=False):
     """Optional local speech recognition. No transcript is sent wholesale to another agent."""
     result_path=db.ROOT/'cache'/('transcript-'+db.uid()+'.json')
     try:
-        run([sys.executable,'-m','backend.transcription',str(path),str(result_path)],timeout=240)
+        run([sys.executable,'-m','backend.transcription',str(path),str(result_path)] + (['auto'] if auto_language else []),timeout=240)
         return json.loads(result_path.read_text('utf-8'))
     finally:
         result_path.unlink(missing_ok=True)
@@ -108,13 +109,18 @@ def narration(script, work, test=False):
         if test:
             run([binary('ffmpeg'), '-y', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000', '-t', str(duration), '-af', 'volume=0.05', str(raw)])
         else:
-            model = os.getenv('PIPER_MODEL', '')
+            from backend.personas import get_persona
+            model = get_persona().get('voice_model') or os.getenv('PIPER_MODEL', '')
             if not model or not Path(model).is_file():
                 raise IntegrationError('Configure uma voz Piper PT-BR licenciada em PIPER_MODEL.')
-            result = subprocess.run([binary('piper'), '--model', model, '--output_file', str(raw)],
-                                    input=scene.narration.encode(), capture_output=True, timeout=90)
+            try:
+                result = subprocess.run([binary('piper'), '--model', model, '--output_file', str(raw)],
+                                        input=scene.narration.encode(), capture_output=True, timeout=90)
+            except subprocess.TimeoutExpired:
+                raise IntegrationError('Piper excedeu 90 segundos na síntese de voz.') from None
             if result.returncode:
-                raise IntegrationError('Falha na síntese Piper.')
+                detail=result.stderr.decode('utf-8',errors='replace').strip()[-1000:]
+                raise IntegrationError('Falha na síntese Piper: '+(detail or 'nenhum detalhe disponível no stderr.'))
         measured = float(probe(raw)['format']['duration'])
         ratio = measured / duration
         if not test and not .65 <= ratio <= 1.4:
@@ -127,46 +133,71 @@ def narration(script, work, test=False):
     return work / 'narration.wav'
 
 
-def render(video, script: Script):
-    work = db.ROOT / 'videos/processing' / video['id']
-    work.mkdir(parents=True, exist_ok=True)
-    style = template(script.template)
-    audio = narration(script, work, bool(video['test']))
-    transcript = transcribe(audio) if db.settings().transcription and not video['test'] else None
-    if transcript:
-        db.atomic(work / 'transcript.json', json.dumps(transcript, ensure_ascii=False))
-    subtitles(script, style, work / 'subtitles.ass', transcript)
-    final = db.ROOT / 'videos/final' / (video['id'] + '.mp4')
-    temporary = work / 'render.mp4'
-    raw = db.ROOT / 'videos/raw' / (video['id'] + '.mp4')
-    args = [binary('ffmpeg'), '-y']
-    if video['rights'] == 'AUTHORIZED' and raw.is_file():
-        source_duration = float(probe(raw)['format']['duration'])
-        for index, scene in enumerate(script.scenes):
-            if scene.source_start + scene.end - scene.start > source_duration + .1:
-                raise BriefingError('Corte excede a duração da mídia; devolver ao Escritor.')
-            run([binary('ffmpeg'), '-y', '-ss', str(scene.source_start), '-i', str(raw), '-t', str(scene.end-scene.start),
-                 '-an', '-vf', 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1',
-                 '-r', '30', '-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p', '-threads', '2', str(work/f'cut-{index}.mp4')])
-        (work/'cuts.txt').write_text('\n'.join(f"file 'cut-{i}.mp4'" for i in range(len(script.scenes))), encoding='utf-8')
-        run([binary('ffmpeg'), '-y', '-f', 'concat', '-safe', '0', '-i', 'cuts.txt', '-c', 'copy', 'cuts.mp4'], cwd=work)
-        args += ['-i', str(work/'cuts.mp4')]
-        vf = 'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1'
+def render(video, script: Script, attempt=1):
+    """Create all video scenes before the evaluator, preserving every attempt."""
+    from backend.visual_renderer import montage
+    from backend.personas import get_persona
+    work=db.ROOT/'videos/processing'/video['id']/f'attempt-{attempt:02d}'
+    work.mkdir(parents=True,exist_ok=True)
+    style=template(script.template)
+    audio=narration(script,work,bool(video['test']))
+    transcript=transcribe(audio) if db.settings().transcription and not video['test'] else None
+    if transcript:db.atomic(work/'transcript.json',json.dumps(transcript,ensure_ascii=False))
+    visual,visuals=montage(video,script,attempt,work)
+    subtitle_file=work/'subtitles.ass'
+    subtitles(script,style,subtitle_file,transcript)
+    # Every used third-party clip is attributed visibly at the right timestamp.
+    credit_events=[]
+    for scene,item in zip(script.scenes,visuals):
+        t=scene.start
+        for part in item.get('segments',[]):
+            duration=float(part.get('duration') or 0)
+            if part.get('source_class')=='THIRD_PARTY':
+                credit=(part.get('credits') or part.get('source') or '').strip()
+                if credit:
+                    credit=clean_subtitle('Fonte: '+credit)[:75].replace(',', ' ')
+                    credit_events.append(f'Dialogue: 3,{subtitle_time(t)},{subtitle_time(t+duration)},Default,,0,0,0,,{{\\an9\\pos(990,150)\\fs25}}{credit}')
+            t+=duration
+    if credit_events:
+        subtitle_file.write_text(subtitle_file.read_text('utf-8')+'\n'+'\n'.join(credit_events),encoding='utf-8')
+    final=db.ROOT/'videos/final'/video['id']/f'attempt-{attempt:02d}.mp4'
+    final.parent.mkdir(parents=True,exist_ok=True)
+    temporary=work/'render.mp4'
+    ff=binary('ffmpeg')
+    args=[ff,'-y','-i',str(visual),'-i',str(audio)]
+    persona=get_persona()
+    image_path=persona.get('image_path','')
+    # A persona reference image is optional until chosen and uploaded by user.
+    if image_path:
+        try:
+            avatar=db.safe_file(image_path)
+            args+=['-loop','1','-i',str(avatar)]
+            vf='[0:v]ass=subtitles.ass[base];[2:v]scale=230:230:force_original_aspect_ratio=decrease[avatar];[base][avatar]overlay=W-w-40:165[v]'
+            args+=['-filter_complex',vf,'-map','[v]']
+        except ValueError:
+            db.log_event(video['id'],'media','PERSONA_IMAGE_MISSING','Avatar não encontrado; render sem avatar.')
+            args+=['-vf','ass=subtitles.ass','-map','0:v:0']
     else:
-        args += ['-f', 'lavfi', '-i', f'color=c={style["background"]}:s=1080x1920:r=30']
-        vf = f'drawbox=x=60:y=120:w=8:h=1680:color={style["accent"]}:t=fill,drawbox=x=100:y=150:w=880:h=6:color={style["accent"]}:t=fill'
-    args += ['-i', str(audio), '-vf', vf + ',ass=subtitles.ass', '-map', '0:v:0', '-map', '1:a:0',
-             '-t', str(script.duration), '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '22', '-pix_fmt', 'yuv420p',
-             '-r', '30', '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', '-threads', '2', str(temporary)]
-    run(args, timeout=600, cwd=work)
-    os.replace(temporary, final)
-    info = probe(final)
-    video_stream = next(s for s in info['streams'] if s['codec_type'] == 'video')
-    db.artifact(video['id'], 'editor', data={'executed': ['cenas', 'narração', 'legendas', 'template', 'H.264/AAC'],
-        'ignored': [], 'failures': [], 'duration': float(info['format']['duration']),
-        'resolution': [video_stream['width'], video_stream['height']], 'codec': video_stream['codec_name'],
-        'bytes': final.stat().st_size, 'test_audio': bool(video['test']), 'subtitle_timing': 'whisper_words' if transcript else 'estimated_by_phrase'},
-        files=[str(final.relative_to(db.ROOT))], next_agent='avaliador')
+        args+=['-vf','ass=subtitles.ass','-map','0:v:0']
+    args+=['-map','1:a:0','-t',str(script.duration),'-c:v','libx264','-preset','veryfast','-crf','22',
+           '-pix_fmt','yuv420p','-r','30','-c:a','aac','-b:a','192k',
+           '-movflags','+faststart','-threads','2',str(temporary)]
+    run(args,timeout=600,cwd=work)
+    # Soundtrack is optional and never overwrites the original media library.
+    from backend.audio_mix import mix
+    mixed=mix(video['id'],temporary,work,script.duration)
+    os.replace(mixed,final)
+    from backend.assets import count_usage
+    count_usage(visuals)
+    info=probe(final)
+    stream=next(s for s in info['streams'] if s['codec_type']=='video')
+    db.artifact(video['id'],'editor',data={'executed':['cenário por cena','narracao','legendas','origem dos assets','H.264/AAC'],
+        'ignored':[],'failures':[],'duration':float(info['format']['duration']),
+        'resolution':[stream['width'],stream['height']],'codec':stream['codec_name'],
+        'bytes':final.stat().st_size,'test_audio':bool(video['test']),
+        'visual_manifest':f'handoff/{video["id"]}/visual-assets.json',
+        'subtitle_timing':'whisper_words' if transcript else 'estimated_by_phrase'},
+        files=[str(final.relative_to(db.ROOT)),f'handoff/{video["id"]}/visual-assets.json'],next_agent='avaliador')
     return final
 
 

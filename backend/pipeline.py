@@ -5,21 +5,25 @@ import time
 from pathlib import Path
 from pydantic import BaseModel, Field
 from sqlalchemy import text
-from backend import core as db, media
+from backend import core as db, media, highlights, production_media, storyboard
 from backend.contracts import ImportRequest, Script, platform_url
-from backend.integrations import IntegrationError, metadata, download_authorized, viral_score, llm, youtube_upload
-from backend.distribution import schedule_postiz
+from backend.integrations import IntegrationError, metadata, viral_score, llm
 
 
 AGENTS = ['diretor', 'cacador', 'escritor', 'editor', 'avaliador']
+
+
+def download_authorized(video):
+    """Compatibility wrapper: authorized source goes to /temp, never /videos/raw."""
+    return production_media.acquire_source_video(video)
 
 
 class Review(BaseModel):
     scores: dict[str, float]
     factual_supported: bool
     original: bool
-    corrections: list[str] = Field(max_length=12)
-    summary: str = Field(max_length=400)
+    corrections: list[str] = Field(max_length=30)
+    summary: str = Field(max_length=8000)
 
 
 def create_video(req: ImportRequest | None = None, test=False, reference=None, variant_key=None, manual_script=None):
@@ -42,13 +46,10 @@ def create_video(req: ImportRequest | None = None, test=False, reference=None, v
         existing = c.execute(text('SELECT id FROM videos WHERE url=:url'), params).scalar()
         if existing:
             return existing
-        # Store the operational date separately from UTC timestamps; count atomically.
-        count = c.execute(text("SELECT value FROM kv WHERE key=:key"), {'key': 'daily:' + db.today()}).scalar()
-        count = int(json.loads(count)) if count else 0
-        if count >= config.daily_limit:
-            raise ValueError('Limite diário de produção atingido.')
-        c.execute(text('INSERT INTO kv VALUES (:key,:value) ON CONFLICT(key) DO UPDATE SET value=excluded.value'),
-                  dict(key='daily:' + db.today(), value=json.dumps(count + 1)))
+        # One slot per active or approved real production, never one slot per
+        # retry, failed/rejected job or test. São Paulo civil-day boundaries.
+        if not test and db.production_usage(c) >= config.daily_limit:
+            raise ValueError('Limite diário de produção atingido (produções ativas + aprovadas hoje).')
         c.execute(text('''INSERT INTO videos(id,run_id,url,platform,title,rights,evidence,credits,instructions,template,duration,status,stage,test,created,updated)
             VALUES (:id,:run,:url,:platform,:title,:rights,:evidence,:credits,:instructions,:template,:duration,'QUEUED','diretor',:test,:now,:now)'''), params)
         if manual_script:
@@ -61,11 +62,23 @@ def create_video(req: ImportRequest | None = None, test=False, reference=None, v
     return id
 
 
+class PipelineInterrupted(Exception):
+    """Manual decision superseded the running pipeline."""
+
+
+def decision(video_id):
+    found=db.rows('SELECT manual_decision FROM videos WHERE id=:id', {'id':video_id})
+    return found[0]['manual_decision'] if found else 'discard'
+
+
 def stage(video_id, agent):
     if db.settings().emergency_stop:
         raise IntegrationError('Parada de emergência ativa.')
-    db.execute("UPDATE videos SET stage=:agent,status='PROCESSING',updated=:now,error=NULL WHERE id=:id",
+    changed=db.execute("UPDATE videos SET stage=:agent,status='PROCESSING',updated=:now,error=NULL "
+               "WHERE id=:id AND (manual_decision IS NULL OR manual_decision='approve_pending')",
                dict(id=video_id, agent=agent, now=time.time()))
+    if not changed:
+        raise PipelineInterrupted('Produção interrompida por decisão manual.')
     db.log_event(video_id, agent, 'START', 'Etapa iniciada.')
 
 
@@ -81,7 +94,20 @@ def hunt(video):
         meta = metadata(video['url'], video['platform'])
         if video['rights'] == 'AUTHORIZED':
             path=download_authorized(video)
-            meta['duration']=float(media.probe(path)['format']['duration'])
+            if path is not None:
+                source_seconds=float(media.probe(path)['format']['duration'])
+                meta['duration']=source_seconds
+            else:
+                source_seconds=0
+                meta['media_download']='FAILED_BACKGROUND_FALLBACK'
+            if source_seconds > highlights.MAX_CLIP_SECONDS:
+                new_duration=min(video['duration'],highlights.MAX_CLIP_SECONDS)
+                context=highlights.analyze(path,source_seconds,new_duration,video_id=video['id'])
+                video['duration']=new_duration
+                meta['highlight_mode']='automatic_authorized_clips'
+                meta['highlight_analysis_file']='handoff/'+video['id']+'/highlights.json'
+                db.execute('UPDATE videos SET duration=:duration WHERE id=:id',
+                           {'duration':new_duration,'id':video['id']})
     db.execute('UPDATE videos SET metadata=:meta,title=:title WHERE id=:id', dict(meta=json.dumps(meta), title=meta['title'], id=video['id']))
     db.artifact(video['id'], 'cacador', data={**meta, 'rights': video['rights'], 'evidence': video['evidence'],
         'credits': video['credits'], 'viral_score': viral_score(meta), 'score_method': 'views/hour + engagement + recency; no source baseline available'}, next_agent='escritor')
@@ -98,14 +124,50 @@ def write_script(video, corrections=None):
                 {'start': 0, 'end': 5, 'text': 'GTA STUDIO · TESTE', 'narration': 'Teste técnico de vídeo vertical. Material sintético autorizado.', 'source_id': video['id']},
                 {'start': 5, 'end': 10, 'text': 'PIPELINE EM OPERAÇÃO', 'narration': 'Handoffs, renderização e avaliação. Nenhuma notícia é apresentada.', 'source_id': video['id']}])
     else:
-        result = llm('escritor', video['id'], {'source': source, 'id': video['id'], 'instructions': video['instructions'],
-            'duration': video['duration'], 'template': video['template'], 'corrections': corrections or [],
-            'constraints': 'Use only supported claims. Original commentary, no source imitation. Visuals are text cards or the authorized source, center crop. No music. Each narration must fit its scene at 2-2.5 words/sec.'}, Script.model_json_schema())
-        script = Script.model_validate(result)
-        if script.duration != video['duration'] or script.template != video['template']:
-            raise IntegrationError('Briefing divergente da duração/template solicitados.')
-        if any(s.source_id != video['id'] for s in script.scenes):
-            raise IntegrationError('Briefing referencia fonte não autorizada.')
+        from backend.personas import get_persona
+        persona=get_persona()
+        clip_file=db.ROOT/'handoff'/video['id']/'highlights.json'
+        clip_analysis=json.loads(clip_file.read_text('utf-8')) if clip_file.exists() else None
+        vision_frames = ([db.safe_file(f['path']) for f in clip_analysis.get('frames',[])[:3]]
+                         if clip_analysis and db.settings().routes['escritor'].vision else None)
+        requested_duration=media.template(video['template']).get('duration') or video['duration']
+        if requested_duration!=video['duration']:
+            requested_duration=int(requested_duration)
+            db.execute('UPDATE videos SET duration=:duration WHERE id=:id',
+                       {'duration':requested_duration,'id':video['id']})
+            video['duration']=requested_duration
+        failures=[]
+        script=None
+        for repair in range(3):
+            try:
+                result=llm('escritor',video['id'],{'source':source,'id':video['id'],
+                    'persona':persona,'highlight_analysis':clip_analysis,
+                    'instructions':video['instructions'],'duration':requested_duration,
+                    'template':video['template'],'corrections':(corrections or [])+failures,
+                    'repair_attempt':repair,
+                    'constraints':'A pessoa narradora é ficcional, não copie personagens conhecidos. '
+                    'Fatos verificados separados de rumores. Notícias em comentário original, não copiar matérias. '
+                    'Cada cena precisa ter narração e texto, com tempo coerente e sem contradições. '
+                    'Conteúdo de terceiros é apenas referência salvo licença documentada.'},
+                    Script.model_json_schema(),images=vision_frames)
+                normalized,fixes=storyboard.normalize(result,requested_duration,video['template'],video['id'])
+                script=Script.model_validate(normalized)
+                if fixes:
+                    db.atomic(db.ROOT/'handoff'/video['id']/f'briefing-fixes-{repair+1}.json',
+                              json.dumps(fixes,ensure_ascii=False,indent=2))
+                    db.log_event(video['id'],'escritor','BRIEFING_REPAIRED',
+                                 ', '.join(f['field'] for f in fixes)[:500])
+                break
+            except (ValueError,TypeError) as exc:
+                failures.append(f'Correção {repair+1}/3: campo duração/template/cenas inválido: {exc}')
+                if repair==2:
+                    raise media.BriefingError('; '.join(failures)) from None
+        if script is None:raise media.BriefingError('Roteiro não pôde ser normalizado.')
+
+        if clip_analysis:
+            edl=highlights.fit_cuts(script,clip_analysis)
+            db.atomic(db.ROOT/'handoff'/video['id']/'highlight-edl.json',
+                      json.dumps(edl,ensure_ascii=False,indent=2))
     content = ' '.join(s.narration.lower() for s in script.scenes)
     fingerprint = hashlib.sha256(content.encode()).hexdigest()
     duplicates = db.rows('SELECT id FROM videos WHERE script_hash=:hash AND id!=:id', dict(hash=fingerprint, id=video['id']))
@@ -139,76 +201,196 @@ def write_script(video, corrections=None):
 
 
 def evaluate(video, script, final):
+    config = db.settings()
+    criteria = config.evaluation_criteria
     technical = media.technical_check(final, script.duration)
     rights_ok = video['rights'] == 'REFERENCE_ONLY' or (video['rights'] == 'AUTHORIZED' and bool(video['evidence']))
-    if not technical['valid'] or not rights_ok:
-        result = {'verdict': 'REPROVADO', 'scores': {}, 'corrections': technical['failures'] + ([] if rights_ok else ['Direitos inválidos']), 'hard_blocks': True}
+    hard_failures = technical['failures'] + ([] if rights_ok else ['Direitos de reutilização não comprovados.'])
+    audio_check = None
+    if hard_failures:
+        review = None
+        scores = {}
+        summary = 'Falha técnica ou de direitos impede a aprovação automática.'
+        corrections = hard_failures
     elif video['test']:
-        result = {'verdict': 'APROVADO', 'scores': {'technical_test': 10}, 'corrections': [], 'test_only': True, 'hard_blocks': False}
+        review=None
+        scores={key:10.0 for key,c in criteria.items() if c.enabled}
+        corrections=[]
+        summary='Teste técnico sintético aprovado; não comprova fatos sobre GTA 6.'
     else:
         frames = media.samples(final, video['id'])
-        config = db.settings()
         visual = config.routes['avaliador'].vision
         audio_check = media.transcript_check(final, script) if config.transcription else None
-        if audio_check and not audio_check['valid']:
-            result = {'verdict':'REVISAR','scores':{},'corrections':['Narração transcrita diverge do briefing.'],'hard_blocks':True}
-            db.artifact(video['id'], 'avaliador', data=result, status='REVISAR', next_agent='escritor')
-            return result
         source = db.read_artifact(video['id'], 'cacador').dados
-        review = Review.model_validate(llm('avaliador', video['id'], {'script': script.model_dump(), 'source': source,
+        review = Review.model_validate(llm('avaliador', video['id'], {
+            'script': script.model_dump(), 'source': source,
             'technical': technical, 'editor': db.read_artifact(video['id'], 'editor').dados,
             'sampled_frames': [str(p.relative_to(db.ROOT)) for p in frames],
             'audio_check': audio_check,
-            'limitations': 'Frames attached only when vision enabled. No direct audio listening: use measured transcript and silence checks. Missing evidence must require human review.'}, Review.model_json_schema(), images=frames[:6] if visual else None))
-        if any(not 0 <= score <= 10 for score in review.scores.values()) or not review.scores:
+            'evaluation_rubric': {key:c.model_dump() for key,c in criteria.items() if c.enabled},
+            'rules': 'Return a 0-10 score for every enabled criterion using its exact key. '
+                     'Cite concrete evidence, and specific improvements. Lack of independent visual '
+                     'confirmation does not prove a false claim: suggest rewriting uncertain statements '
+                     'as rumor or require manual review. Fair use is not a license and mentioning it '
+                     'alone must not trigger a rejection. Do not claim to have seen frames when images '
+                     'were not attached.'}, Review.model_json_schema(), images=frames[:6] if visual else None))
+        scores=review.scores
+        if any(not 0 <= score <= 10 for score in scores.values()):
             raise IntegrationError('Notas de avaliação inválidas.')
-        score = sum(review.scores.values()) / len(review.scores)
-        verdict = 'APROVADO' if score >= db.settings().approval_score and review.factual_supported and review.original and not review.corrections else 'REVISAR'
-        result = {**review.model_dump(), 'verdict': verdict, 'score': score, 'hard_blocks': False,
-                  'requires_human_audiovisual_review': not (visual and audio_check and audio_check['valid']), 'technical': technical}
-    db.artifact(video['id'], 'avaliador', data=result, status='CONCLUIDO' if result['verdict'] == 'APROVADO' else result['verdict'],
-                next_agent='diretor' if result['verdict'] != 'REVISAR' else 'escritor')
+        corrections=list(review.corrections)
+        summary=review.summary
+        if audio_check and not audio_check['valid']:
+            corrections.append('Narração transcrita diverge do briefing.')
+    breakdown={}
+    weighted=0.0;weight=0.0;threshold_failures=[]
+    for key,c in criteria.items():
+        val=scores.get(key)
+        passed=None if val is None else val >= c.min_score
+        breakdown[key]={**c.model_dump(), 'score':val, 'passed':passed}
+        if c.enabled:
+            if val is None:
+                threshold_failures.append(f'{c.name}: nota não fornecida.')
+            else:
+                weighted+=c.weight*val;weight+=c.weight
+                if not passed:
+                    threshold_failures.append(f'{c.name}: {val:.1f} abaixo do mínimo {c.min_score:.1f}.')
+    score=round(weighted/weight,2) if weight else 0.0
+    factual_ok = review.factual_supported if review else bool(video['test'])
+    original_ok = review.original if review else bool(video['test'])
+    if review and not factual_ok:
+        threshold_failures.append('Afirmações sem suporte; reescrever ou confirmar com fonte verificável.')
+    if review and not original_ok:
+        threshold_failures.append('Originalidade insuficiente; produzir roteiro e estrutura próprios.')
+    if score < config.approval_score:
+        threshold_failures.append(f'Nota geral {score:.1f} inferior ao mínimo {config.approval_score:.1f}.')
+    corrections=list(dict.fromkeys(corrections+threshold_failures+hard_failures))
+    verdict = 'APROVADO' if not corrections and not hard_failures else ('REPROVADO' if hard_failures else 'REVISAR')
+    result={'verdict':verdict,'score':score,'scores':scores,'criteria':breakdown,'summary':summary,
+            'reason_full':'\n'.join(corrections) if corrections else summary,
+            'corrections':corrections,'hard_blocks':bool(hard_failures),
+            'requires_human_audiovisual_review': not (config.routes['avaliador'].vision and audio_check and audio_check.get('valid')),
+            'technical':technical,'factual_supported':factual_ok,'original':original_ok}
+    db.artifact(video['id'], 'avaliador', data=result,
+                status='CONCLUIDO' if verdict=='APROVADO' else verdict,
+                next_agent='diretor' if verdict=='APROVADO' else 'escritor')
     return result
+
+
+def store_attempt(video_id, attempt, result, final=None, error=None):
+    path=str(final.relative_to(db.ROOT)) if final else None
+    stamp=time.time()
+    db.execute('''INSERT INTO video_attempts(video_id,attempt,verdict,score,details,render_path,render_error,created)
+        VALUES (:id,:attempt,:verdict,:score,:details,:path,:error,:now)
+        ON CONFLICT(video_id,attempt) DO UPDATE SET verdict=excluded.verdict,score=excluded.score,
+          details=excluded.details,render_path=excluded.render_path,render_error=excluded.render_error,
+          created=excluded.created''',dict(id=video_id,attempt=attempt,verdict=result['verdict'],
+           score=result.get('score'),details=json.dumps(result,ensure_ascii=False),path=path,error=error,now=stamp))
+    db.atomic(db.ROOT/'handoff'/video_id/f'review-{attempt}.json',json.dumps(result,ensure_ascii=False,indent=2))
+    folder=db.ROOT/'handoff'/video_id
+    for name in ('script.json','escritor.json','editor.json','avaliador.json'):
+        source=folder/name
+        if source.is_file():
+            shutil.copy2(source,folder/f'{source.stem}-attempt-{attempt}{source.suffix}')
+
+
+def approve_rendered(video_id, manual=False, by='local_operator'):
+    video=db.rows('SELECT * FROM videos WHERE id=:id',{'id':video_id})[0]
+    if video['manual_decision']=='discard':
+        raise PipelineInterrupted('Produção descartada.')
+    if video['rights'] in ('BLOCKED','REVIEW_REQUIRED') or (video['rights']=='AUTHORIZED' and not video['evidence']):
+        raise IntegrationError('Aprovação bloqueada: direitos de uso não verificados.')
+    if not video['final_path'] or not (db.ROOT/video['final_path']).is_file():
+        raise IntegrationError('Não existe render para aprovar.')
+    if manual:
+        check=media.technical_check(db.safe_file(video['final_path']),video['duration'])
+        if not check['valid']:
+            raise IntegrationError('Render tecnicamente inválido; reprovação manual não contorna integridade de mídia: '
+                                   + '; '.join(check['failures']))
+    now=time.time()
+    changed=db.execute("UPDATE videos SET approved=1,approved_at=:now,status='APPROVED',stage='diretor',error=NULL,updated=:now,"
+               "manual_decision=:decision,manual_by=:by,manual_at=:manual_at WHERE id=:id "
+               "AND (manual_decision IS NULL OR manual_decision='approve_pending')",
+               dict(id=video_id,now=now,decision='approved' if manual else None,by=by if manual else None,
+                    manual_at=now if manual else None))
+    if not changed:
+        raise PipelineInterrupted('A produção já recebeu decisão manual.')
+    db.log_event(video_id,'diretor','MANUAL_APPROVED' if manual else 'DONE',
+                 'Aprovação manual registrada.' if manual else 'Aprovado pelo Avaliador.')
+    distribute(video_id)
+    production_media.remove_workspace(video_id)
 
 
 def run_pipeline(video_id):
     video = db.rows('SELECT * FROM videos WHERE id=:id', {'id': video_id})[0]
+    if video['manual_decision'] in ('discard','approved'):
+        return
     if video['approved']:
         distribute(video_id)
         return
     stage(video_id, 'diretor')
-    db.artifact(video_id, 'diretor', data={'daily_limit': db.settings().daily_limit, 'revision_limit': 2}, next_agent='cacador')
-    stage(video_id, 'cacador')
-    if not (db.ROOT / 'handoff' / video_id / 'cacador.json').exists():
+    config=db.settings()
+    db.artifact(video_id,'diretor',data={'daily_limit':config.daily_limit,
+        'max_review_attempts':config.max_review_attempts},next_agent='cacador')
+    stage(video_id,'cacador')
+    if not (db.ROOT/'handoff'/video_id/'cacador.json').exists():
         hunt(video)
-    corrections = None
-    for revision in range(video['revision'], 3):
-        db.execute('UPDATE videos SET revision=:r WHERE id=:id', dict(r=revision, id=video_id))
-        stage(video_id, 'escritor')
-        script = write_script(video, corrections)
-        stage(video_id, 'editor')
+    previous=db.rows('SELECT attempt,details FROM video_attempts WHERE video_id=:id ORDER BY attempt DESC LIMIT 1',{'id':video_id})
+    next_attempt=(previous[0]['attempt']+1) if previous else 1
+    corrections=json.loads(previous[0]['details']).get('corrections',[]) if previous else None
+    for attempt in range(next_attempt,config.max_review_attempts+1):
+        if decision(video_id) in ('discard','approved'):
+            return
+        db.execute('UPDATE videos SET revision=:r WHERE id=:id',dict(r=attempt,id=video_id))
+        final=None;render_error=None
         try:
-            final = media.render(video, script)
-        except media.BriefingError as exc:
-            result={'verdict':'REVISAR','scores':{},'corrections':[str(exc)],'hard_blocks':True}
-            db.artifact(video_id,'editor',data=result,status='REVISAR',summary='Briefing requer correção de timing/cortes.',next_agent='escritor')
-        else:
-            stage(video_id, 'avaliador')
-            result = evaluate(video, script, final)
-        # Archive each evaluation; overwriting the latest handoff does not erase history.
-        db.atomic(db.ROOT / 'handoff' / video_id / f'review-{revision}.json', json.dumps(result, ensure_ascii=False))
-        if result['verdict'] == 'APROVADO':
-            db.execute("UPDATE videos SET approved=1,status='APPROVED',stage='diretor',final_path=:path,updated=:now WHERE id=:id",
-                       dict(id=video_id, path=str(final.relative_to(db.ROOT)), now=time.time()))
-            db.log_event(video_id, 'diretor', 'DONE', 'Vídeo aprovado. Testes e revisão audiovisual seguem restrições de distribuição.')
-            distribute(video_id)
+            stage(video_id,'escritor')
+            script=write_script(video,corrections)
+            stage(video_id,'editor')
+            final=media.render(video,script,attempt=attempt)
+            # Persist each render before scoring so even rejected files can be previewed.
+            db.execute("UPDATE videos SET final_path=:path,render_error=NULL,updated=:now WHERE id=:id AND "
+                       "(manual_decision IS NULL OR manual_decision='approve_pending')",
+                       {'path':str(final.relative_to(db.ROOT)),'now':time.time(),'id':video_id})
+            if decision(video_id)=='discard':
+                return
+            if decision(video_id)=='approve_pending':
+                store_attempt(video_id,attempt,{'verdict':'APROVADO_MANUAL','reason_full':'Aprovado manualmente antes da avaliação.',
+                                           'scores':{},'corrections':[]},final)
+                approve_rendered(video_id,manual=True)
+                return
+            stage(video_id,'avaliador')
+            result=evaluate(video,script,final)
+        except PipelineInterrupted:
+            return
+        except (media.BriefingError,IntegrationError) as exc:
+            render_error=str(exc)
+            result={'verdict':'REVISAR','score':None,'scores':{},'criteria':{},
+                    'reason_full':render_error,'summary':'Falha na edição ou avaliação.',
+                    'corrections':[render_error],'hard_blocks':False}
+            if final is None:
+                db.execute('UPDATE videos SET render_error=:err WHERE id=:id',{'err':render_error,'id':video_id})
+                db.artifact(video_id,'editor',data=result,status='REVISAR',
+                            summary='Render falhou; consultar motivo completo.',next_agent='escritor')
+        store_attempt(video_id,attempt,result,final,render_error)
+        if decision(video_id) in ('discard','approved'):
+            return
+        if decision(video_id)=='approve_pending' and final:
+            approve_rendered(video_id,manual=True)
+            return
+        if result['verdict']=='APROVADO':
+            approve_rendered(video_id)
             daily_report()
             return
-        if result['verdict'] == 'REPROVADO':
-            break
-        corrections = result['corrections']
-    db.execute("UPDATE videos SET status='REJECTED',stage='diretor',error=:error WHERE id=:id", dict(id=video_id, error='; '.join(result['corrections'])[:600] or 'Limite de duas revisões atingido.'))
-    db.notify('rejected:' + video_id, 'Vídeo reprovado: ' + video_id + '. Consulte a avaliação.')
+        corrections=result.get('corrections') or ['Reescrever roteiro e alterar as cenas.']
+        db.log_event(video_id,'avaliador','REVIEW',f'Tentativa {attempt}/{config.max_review_attempts} reprovada; refazendo.')
+    if decision(video_id) in ('discard','approved'):
+        return
+    latest=db.rows('SELECT details FROM video_attempts WHERE video_id=:id ORDER BY attempt DESC LIMIT 1',{'id':video_id})
+    reason=json.loads(latest[0]['details']).get('reason_full','Sem avaliação disponível.') if latest else 'Sem avaliação disponível.'
+    db.execute("UPDATE videos SET status='AWAITING_MANUAL_DECISION',stage='diretor',error=:error,updated=:now "
+               "WHERE id=:id AND (manual_decision IS NULL OR manual_decision='approve_pending')",
+               dict(id=video_id,error=reason,now=time.time()))
+    db.notify('manual-decision:'+video_id,'Limite de avaliações atingido para '+video_id+'. Aprovar ou descartar no Video Studio.')
     daily_report()
 
 
@@ -220,9 +402,17 @@ def distribute(video_id):
     if config.emergency_stop:
         raise IntegrationError('Distribuição pausada por emergência.')
     script = Script.model_validate_json((db.ROOT / 'handoff' / video_id / 'script.json').read_text('utf-8')).model_dump()
-    if video['credits']:
-        script['description'] = (script['description'] + '\n\nCréditos: ' + video['credits'])[:5000]
-    review = db.read_artifact(video_id, 'avaliador').dados
+    credits=set()
+    if video['credits']:credits.add(video['credits'])
+    manifest=db.ROOT/'handoff'/video_id/'visual-assets.json'
+    if manifest.is_file():
+        for item in json.loads(manifest.read_text('utf-8')):
+            if item.get('source_clip_url'):credits.add(str(item['source_clip_credit'])+' — '+str(item['source_clip_url']))
+            elif item.get('overlay_source') and video['platform']=='news':
+                credits.add('Fonte da notícia: '+str(item['overlay_source']))
+    if credits:
+        script['description']=(script['description']+'\n\nFontes e créditos:\n'+'\n'.join(sorted(credits)))[:5000]
+    review = (db.read_artifact(video_id, 'avaliador').dados if (db.ROOT/'handoff'/video_id/'avaliador.json').exists() else {'verdict':'APROVADO_MANUAL','summary':'Decisão manual.'})
     final = db.safe_file(video['final_path'])
     for platform in config.platforms:
         if db.settings().emergency_stop:
@@ -242,35 +432,13 @@ def distribute(video_id):
         db.atomic(folder / f'metadata_{video_id}.json', json.dumps({**script, 'credits': video['credits'], 'source': video['url'],
             'test_only': bool(video['test']), 'review': review, 'publication_id': pub['id']}, ensure_ascii=False, indent=2))
         db.execute('UPDATE publications SET output_path=:path WHERE id=:id', dict(id=pub['id'], path=str(output.relative_to(db.ROOT))))
-        can_auto = (platform == 'youtube' and config.youtube_auto and config.approval_mode == 'automatic'
-                    and not video['test'] and not review.get('requires_human_audiovisual_review'))
-        can_postiz = (config.postiz_auto and platform in config.postiz_channels and config.approval_mode == 'automatic'
-                      and not video['test'] and not review.get('requires_human_audiovisual_review'))
-        if can_postiz:
-            try:
-                schedule_postiz(pub, final, script)
-            except IntegrationError:
-                current = db.rows('SELECT status FROM publications WHERE id=:id',{'id':pub['id']})[0]['status']
-                # PENDENTE means the non-idempotent create call was not started.
-                db.execute('UPDATE publications SET status=:status,error=:error WHERE id=:id',dict(id=pub['id'],
-                    status='AGUARDANDO_PUBLICACAO_MANUAL' if current=='PENDENTE' else 'PUBLICANDO',
-                    error='Postiz indisponível ou resposta incerta. Consulte a integração; arquivo manual preservado.'))
-                db.notify('postiz-error:'+pub['id'],'Postiz requer atenção; não será realizado reenvio automático.')
-        elif can_auto:
-            # Durable intent before network call; ambiguous failures are never blindly retried.
-            changed = db.execute("UPDATE publications SET status='PUBLICANDO',updated=:now WHERE id=:id AND status='PENDENTE'", dict(id=pub['id'], now=time.time()))
-            if changed:
-                try:
-                    external, url = youtube_upload(final, script)
-                    db.execute("UPDATE publications SET status='PUBLICADO',external_id=:external,url=:url,updated=:now WHERE id=:id",
-                               dict(id=pub['id'], external=external, url=url, now=time.time()))
-                    db.notify('published:' + pub['id'], 'Upload YouTube confirmado (privado): ' + url)
-                except IntegrationError:
-                    db.execute("UPDATE publications SET status='REQUER_AUTENTICACAO',error='Verifique autenticação e reconcilie possível upload antes de repetir.' WHERE id=:id", {'id': pub['id']})
-                    db.notify('auth:' + pub['id'], 'YouTube: autenticação ou reconciliação necessária; arquivo manual preservado.')
-        else:
-            db.execute("UPDATE publications SET status='AGUARDANDO_PUBLICACAO_MANUAL',updated=:now WHERE id=:id", dict(id=pub['id'], now=time.time()))
-            db.notify('manual:' + pub['id'], f'{platform}: vídeo {video_id} pronto para revisão e publicação manual' + (' (TESTE; não publicar).' if video['test'] else '.'))
+        # This build never sends content to a social network. The creator downloads,
+        # reviews and publishes it personally; pending files are never auto-deleted.
+        db.execute("UPDATE publications SET status='AGUARDANDO_PUBLICACAO_MANUAL',updated=:now WHERE id=:id",
+                   {'id': pub['id'], 'now': time.time()})
+        db.notify('manual:' + pub['id'],
+                  f'{platform}: vídeo {video_id} pronto para revisão e publicação manual' +
+                  (' (TESTE; não publicar).' if video['test'] else '.'))
 
 
 def daily_report():

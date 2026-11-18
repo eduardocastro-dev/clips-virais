@@ -12,7 +12,7 @@ def main():
     if not target.is_relative_to((db.ROOT/'cache').resolve()):
         raise ValueError('Transcript destination outside cache')
     model=WhisperModel(os.getenv('WHISPER_MODEL','small'),device='cpu',compute_type='int8',download_root=str(db.ROOT/'cache/whisper'))
-    segments,info=model.transcribe(str(source),language='pt',word_timestamps=True,vad_filter=True)
+    segments,info=model.transcribe(str(source),language=None if len(sys.argv)>3 and sys.argv[3]=='auto' else 'pt',word_timestamps=True,vad_filter=True)
     words=[{'start':w.start,'end':w.end,'text':w.word.strip()} for segment in segments for w in (segment.words or [])]
     db.atomic(target,json.dumps({'language':info.language,'words':words,'text':' '.join(w['text'] for w in words)},ensure_ascii=False))
 

@@ -41,3 +41,45 @@
 .asset-scene-segment p{font-size:11px;margin:4px 0}
 .upload-media-preview{display:block;max-width:180px;max-height:210px;object-fit:contain;border-radius:8px;margin:8px 0 18px;background:#0b121d}
 .upload-audio-preview{display:block;max-width:100%;margin:10px 0 18px}
+/* V8 asset gallery — thumbnails instead of long stacked edit forms. */
+.asset-gallery-layout{display:grid;grid-template-columns:minmax(0,2.5fr) minmax(265px,1fr);gap:18px;align-items:start}
+.asset-gallery-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:12px;margin:18px 0}
+.asset-gallery-card{min-width:0;position:relative;border:1px solid #304459;border-radius:12px;background:#111d2b;overflow:hidden}
+.asset-tile-top{position:absolute;z-index:3;inset:7px 7px auto;display:flex;justify-content:space-between;align-items:center;pointer-events:none}
+.asset-tile-top>*{pointer-events:auto;background:#101a2add;padding:4px 6px;border-radius:6px;font-size:11px}
+.asset-thumbnail-button{width:100%;display:block;border:0;padding:0;background:transparent;cursor:pointer}
+.asset-cover{height:145px;background:#07111c;overflow:hidden;position:relative}
+.asset-cover-media{width:100%;height:100%;object-fit:cover;display:block}
+.asset-no-cover{height:100%;display:grid;place-items:center;color:#91a5bb;font-size:12px}
+.asset-duration{position:absolute;bottom:7px;right:7px;color:#fff;background:#000c;padding:2px 4px;font-size:11px}
+.asset-card-meta{padding:8px 10px;display:grid;gap:3px;min-height:73px}
+.asset-card-meta strong{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.asset-card-meta small{font-size:10px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:#90aabf}
+.asset-card-actions{padding:5px 9px 10px;display:flex;justify-content:space-between;gap:6px}
+.asset-card-actions button{padding:5px 7px;font-size:11px}
+.asset-card-menu{position:relative}
+.asset-card-menu summary{list-style:none;cursor:pointer;padding:5px;border:1px solid #34495c;border-radius:6px}
+.asset-card-menu-content{position:absolute;right:0;bottom:28px;z-index:5;width:180px;background:#182b40;border:1px solid #4b6376;border-radius:9px;padding:6px;display:grid;gap:4px;box-shadow:0 10px 24px #0008}
+.asset-card-menu-content button{width:100%;justify-content:flex-start;text-align:left}
+.asset-expand{width:100%;border:0;border-top:1px solid #304459;padding:7px;display:flex;align-items:center;gap:5px;font-size:11px}
+.asset-derived-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;padding:7px}
+.asset-bulk{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:8px;background:#142f39;border-radius:8px;margin:12px 0}
+.asset-filters{display:flex;flex-wrap:wrap;gap:8px}.asset-filters select,.asset-filters input{flex:1 1 140px;min-width:0}
+@media(max-width:1050px){.asset-gallery-layout{grid-template-columns:1fr}}
+/* Compact 4×6 character expressions with one menu per card. */
+.pose-grid-v8{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-top:12px}
+.pose-card-v8{min-width:0;position:relative;border-radius:10px;border:1px solid #354d5e;background:#0c1823;padding:4px}
+.pose-card-v8>img{display:block;width:100%;height:125px;object-fit:contain}
+.pose-empty{display:grid;place-items:center;height:125px;font-size:11px}
+.pose-card-bottom{display:flex;justify-content:space-between;align-items:center;gap:3px}
+.pose-card-bottom small{font-size:10px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.pose-actions-v8{position:relative;z-index:2}.pose-actions-v8 summary{list-style:none;cursor:pointer;font-size:20px;padding:2px 5px}
+.pose-action-options{position:absolute;z-index:10;bottom:24px;right:0;background:#1c2e42;border:1px solid #557083;border-radius:8px;min-width:142px;padding:8px;display:grid;gap:4px}
+.pose-action-options button,.pose-action-options label{font-size:11px;min-width:0;padding:6px;text-align:left;width:100%}
+.pose-action-options input{width:100%;font-size:10px}
+/* Shorts 9:16 composition guides, visible only on demand. */
+.preview-safe-shell{position:relative;width:min(300px,100%);margin:auto}
+.preview-safe-shell .preview{width:100%;margin:15px auto 20px}
+.shorts-safe-overlay{position:absolute;inset:15px 0 20px;pointer-events:none;border-radius:10px;overflow:hidden}
+.shorts-unsafe-bottom{position:absolute;bottom:0;left:0;right:0;height:18%;background:#ff704440;border-top:2px dashed #ff9c68;color:#fff;font-size:9px;display:grid;place-items:center;text-align:center}
+.shorts-unsafe-right{position:absolute;right:0;top:0;bottom:18%;width:15%;background:#e7bc3540;border-left:2px dashed #eed35f;color:#fff;font-size:8px;writing-mode:vertical-rl;text-align:center}

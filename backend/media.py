@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 import shutil
 import subprocess
@@ -16,6 +17,11 @@ class BriefingError(IntegrationError):
     """Creative/timing correction required; return to writer instead of retrying infrastructure."""
 
 
+class PreflightError(IntegrationError):
+    # Input, alignment or render quality issue; do not spend an AI review attempt.
+    pass
+
+
 def binary(name):
     executable = os.getenv(name.upper() + '_BIN') or shutil.which(name)
     if not executable:
@@ -29,10 +35,16 @@ def run(args, timeout=240, cwd=None):
     except subprocess.TimeoutExpired:
         raise IntegrationError('Processamento de mídia excedeu o timeout.') from None
     if result.returncode:
-        # stderr from media programs is local, but keep it out of handoffs.
-        db.atomic(db.ROOT / 'logs' / 'media-last-error.log', result.stderr.decode('utf-8', errors='replace')[-6000:])
-        detail=result.stderr.decode('utf-8',errors='replace').strip().splitlines()[-1:]
-        raise IntegrationError('Falha no FFmpeg: '+(' '.join(detail)[:1000] if detail else 'stderr vazio')+' (log: media-last-error.log)')
+        # Preserve the full Python traceback for the local diagnostic. Do not mislabel
+        # Python/PyAV failures as failures of the FFmpeg executable.
+        stderr=result.stderr.decode('utf-8', errors='replace')
+        log=db.ROOT/'logs'/'media-last-error.log'
+        db.atomic(log, stderr[-24000:])
+        command=Path(str(args[0])).name.lower()
+        component=('Python/PyAV/Faster Whisper' if ('python' in command or 'traceback (most recent' in stderr.lower())
+                   else 'FFmpeg/ffprobe' if command.startswith(('ffmpeg','ffprobe')) else command)
+        detail=next((line.strip() for line in reversed(stderr.splitlines()) if line.strip()), 'stderr vazio')
+        raise IntegrationError(f'Falha em {component}: {detail[:600]} (traceback: logs/media-last-error.log)')
     return result.stdout
 
 
@@ -70,7 +82,7 @@ def transcribe(path, auto_language=False):
 def subtitles(script, style, target, transcript=None):
     lines = ['[Script Info]', 'ScriptType: v4.00+', 'PlayResX: 1080', 'PlayResY: 1920', '[V4+ Styles]',
              'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
-             f'Style: Default,DejaVu Sans,{style["font_size"]},&H00FFFFFF,&H00FFFFFF,&H00101321,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,2,90,90,330,1',
+             f'Style: Default,DejaVu Sans,{style["font_size"]},&H00FFFFFF,&H00FFFFFF,&H00101321,&H80000000,-1,0,0,0,100,100,0,0,1,4,1,2,90,90,745,1',
              'Style: Header,DejaVu Sans,65,&H00FFFFFF,&H00FFFFFF,&H00101321,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,8,90,90,240,1',
              '[Events]', 'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text']
     hook='\\N'.join(textwrap.wrap(clean_subtitle(script.hook),24))
@@ -91,46 +103,22 @@ def subtitles(script, style, target, transcript=None):
             start = scene.start + (scene.end - scene.start) * index / len(chunks)
             end = scene.start + (scene.end - scene.start) * (index + 1) / len(chunks)
             lines.append(f'Dialogue: 1,{subtitle_time(start)},{subtitle_time(end)},Default,,0,0,0,,{{\\fad(70,70)}}{chunk}')
-    if transcript:
-        words = transcript['words']
-        for offset in range(0, len(words), 6):
-            chunk = words[offset:offset+6]
-            text = clean_subtitle(' '.join(w['text'] for w in chunk))
-            lines.append(f'Dialogue: 1,{subtitle_time(chunk[0]["start"])},{subtitle_time(chunk[-1]["end"])},Default,,0,0,0,,{{\\fad(70,70)}}{text}')
+    if transcript and transcript.get('words'):
+        # Real ASR word timestamps. One word at a time with a micro-pop.
+        keywords={'GTA','VI','VICE','CITY','ROCKSTAR','TRAILER','GAMEPLAY','NOVO'}
+        for item in transcript['words']:
+            token=clean_subtitle(str(item.get('text','')).strip())
+            if not token:continue
+            color=r'\1c&H00F4FF&' if any(x.upper() in keywords for x in re.findall(r'[A-Za-zÀ-ÿ]+',token)) else ''
+            start=float(item['start']);end=max(start+.06,float(item['end']))
+            effect=r'\fscx112\fscy112\fad(40,60)'+color
+            lines.append(f'Dialogue: 1,{subtitle_time(start)},{subtitle_time(end)},Default,,0,0,0,,{{{effect}}}{token}')
     target.write_text('\n'.join(lines), encoding='utf-8')
 
 
 def narration(script, work, test=False):
-    files = []
-    for index, scene in enumerate(script.scenes):
-        raw = work / f'voice-{index}.wav'
-        fitted = work / f'fitted-{index}.wav'
-        duration = scene.end - scene.start
-        if test:
-            run([binary('ffmpeg'), '-y', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000', '-t', str(duration), '-af', 'volume=0.05', str(raw)])
-        else:
-            from backend.personas import get_persona
-            model = get_persona().get('voice_model') or os.getenv('PIPER_MODEL', '')
-            if not model or not Path(model).is_file():
-                raise IntegrationError('Configure uma voz Piper PT-BR licenciada em PIPER_MODEL.')
-            try:
-                result = subprocess.run([binary('piper'), '--model', model, '--output_file', str(raw)],
-                                        input=scene.narration.encode(), capture_output=True, timeout=90)
-            except subprocess.TimeoutExpired:
-                raise IntegrationError('Piper excedeu 90 segundos na síntese de voz.') from None
-            if result.returncode:
-                detail=result.stderr.decode('utf-8',errors='replace').strip()[-1000:]
-                raise IntegrationError('Falha na síntese Piper: '+(detail or 'nenhum detalhe disponível no stderr.'))
-        measured = float(probe(raw)['format']['duration'])
-        ratio = measured / duration
-        if not test and not .65 <= ratio <= 1.4:
-            raise BriefingError('Narração não cabe na cena; revisar quantidade de palavras e timestamps.')
-        run([binary('ffmpeg'), '-y', '-i', str(raw), '-af', f'atempo={max(.5,min(2,ratio))},apad,atrim=duration={duration},loudnorm=I=-16:TP=-1.5:LRA=11',
-             '-ar', '48000', '-ac', '2', str(fitted)])
-        files.append(fitted)
-    (work / 'audio-list.txt').write_text('\n'.join(f"file '{p.name}'" for p in files), encoding='utf-8')
-    run([binary('ffmpeg'), '-y', '-f', 'concat', '-safe', '0', '-i', 'audio-list.txt', '-c:a', 'pcm_s16le', 'narration.wav'], cwd=work)
-    return work / 'narration.wav'
+    from backend.audio_timeline import create
+    return create(script,work,test)
 
 
 def render(video, script: Script, attempt=1):
@@ -140,8 +128,29 @@ def render(video, script: Script, attempt=1):
     work=db.ROOT/'videos/processing'/video['id']/f'attempt-{attempt:02d}'
     work.mkdir(parents=True,exist_ok=True)
     style=template(script.template)
+    # Mandatory input check BEFORE invoking TTS, FFmpeg or evaluator.
+    from backend.assets import mandatory_assets, MissingAssetsError, sync_library
+    sync_library()
+    missing=mandatory_assets(script=script)
+    if missing:
+        raise MissingAssetsError(missing)
     audio=narration(script,work,bool(video['test']))
-    transcript=transcribe(audio) if db.settings().transcription and not video['test'] else None
+    # Forced word timestamp alignment for real videos (Whisper local).
+    # Never label estimated phrase timings as synchronized subtitles.
+    timeline=json.loads((work/'audio-timeline.json').read_text('utf-8'))
+    try:
+        transcript=transcribe(audio) if not video['test'] else None
+        if not video['test'] and (not transcript or not transcript.get('words')):
+            raise IntegrationError('Faster Whisper não retornou palavras alinhadas.')
+        if transcript:transcript['method']='whisper_words'
+    except (IntegrationError,RuntimeError,TypeError) as exc:
+        # We synthesized each sentence separately and measured its REAL PCM duration.
+        # This fallback is phrase-level, not an estimated word-level alignment.
+        db.log_event(video['id'],'media','ASR_FALLBACK','PyAV/Faster Whisper: '+str(exc)[:400])
+        transcript={'words':[],'phrases':timeline['phrases'],'method':'tts_phrase_ffprobe_measured',
+                    'asr_error':str(exc)[:600]}
+    if not transcript and not video['test']:
+        raise PreflightError('Nenhum alinhamento temporal disponível (ASR e TTS).')
     if transcript:db.atomic(work/'transcript.json',json.dumps(transcript,ensure_ascii=False))
     visual,visuals=montage(video,script,attempt,work)
     subtitle_file=work/'subtitles.ass'
@@ -165,38 +174,72 @@ def render(video, script: Script, attempt=1):
     temporary=work/'render.mp4'
     ff=binary('ffmpeg')
     args=[ff,'-y','-i',str(visual),'-i',str(audio)]
-    persona=get_persona()
-    image_path=persona.get('image_path','')
-    # A persona reference image is optional until chosen and uploaded by user.
-    if image_path:
+    # Use a transparent 24-pose expression per segment; each input remains immutable.
+    from backend.personas import expression_file
+    graph=['[0:v]ass=subtitles.ass[base]']
+    current='base'
+    previous_emotion_by_speaker={}
+    timeline_phrases=timeline.get('phrases',[])
+    # Use actual TTS speaking boundaries (rather than estimated scene timestamps)
+    # so that the character switches when the voice actually switches.
+    sections=[]
+    for phrase in timeline_phrases:
+        if not sections or sections[-1]['speaker']!=phrase['speaker'] or sections[-1]['emotion']!=phrase['emotion']:
+            sections.append({'speaker':phrase['speaker'],'emotion':phrase['emotion'],
+                             'start':phrase['start'],'end':phrase['end']})
+        else:sections[-1]['end']=phrase['end']
+    if not sections:
+        sections=[{'speaker':sc.speaker,'emotion':sc.emotion,'start':sc.start,'end':sc.end} for sc in script.scenes]
+    pose_report=[]
+    for idx,section in enumerate(sections):
+        who=section['speaker']
         try:
-            avatar=db.safe_file(image_path)
-            args+=['-loop','1','-i',str(avatar)]
-            vf='[0:v]ass=subtitles.ass[base];[2:v]scale=230:230:force_original_aspect_ratio=decrease[avatar];[base][avatar]overlay=W-w-40:165[v]'
-            args+=['-filter_complex',vf,'-map','[v]']
-        except ValueError:
-            db.log_event(video['id'],'media','PERSONA_IMAGE_MISSING','Avatar não encontrado; render sem avatar.')
-            args+=['-vf','ass=subtitles.ass','-map','0:v:0']
-    else:
-        args+=['-vf','ass=subtitles.ass','-map','0:v:0']
+            avatar,actual=expression_file(who,section['emotion'],previous_emotion_by_speaker.get(who))
+        except (ValueError,OSError) as exc:
+            raise PreflightError(f'Pose obrigatória indisponível para {who}: {exc}') from exc
+        previous_emotion_by_speaker[who]=actual
+        args+=['-loop','1','-framerate','1','-i',str(avatar)]
+        input_index=idx+2
+        graph.append(f'[{input_index}:v]scale=720:850:force_original_aspect_ratio=decrease,format=rgba[avatar{idx}]')
+        label=f'overlay{idx}'
+        start,end=section['start'],section['end']
+        side_x='38' if idx%2==0 else 'W-w-155'
+        graph.append(f"[{current}][avatar{idx}]overlay=x={side_x}:y=1110+5*sin(2*PI*t/3):enable='between(t,{start:.3f},{end:.3f})'[{label}]")
+        current=label
+        pose_report.append({'speaker':who,'requested_emotion':section['emotion'],'emotion':actual,
+                            'file':str(avatar.relative_to(db.ROOT)),'start':start,'end':end,'layout':'bust','side':'left' if idx%2==0 else 'right',
+                            'scale_px':[720,850], 'safe_zone':'face_above_bottom_18_percent'})
+    db.atomic(work/'pose-timeline.json',json.dumps(pose_report,ensure_ascii=False,indent=2))
+    args+=['-filter_complex',';'.join(graph),'-map',f'[{current}]']
     args+=['-map','1:a:0','-t',str(script.duration),'-c:v','libx264','-preset','veryfast','-crf','22',
            '-pix_fmt','yuv420p','-r','30','-c:a','aac','-b:a','192k',
            '-movflags','+faststart','-threads','2',str(temporary)]
     run(args,timeout=600,cwd=work)
     # Soundtrack is optional and never overwrites the original media library.
     from backend.audio_mix import mix
-    mixed=mix(video['id'],temporary,work,script.duration)
+    try:
+        mixed=mix(video['id'],temporary,work,script.duration)
+    except IntegrationError as exc:
+        raise PreflightError('Não foi possível mixar música/narração com os assets cadastrados: '+str(exc)) from exc
     os.replace(mixed,final)
     from backend.assets import count_usage
     count_usage(visuals)
     info=probe(final)
+    # Make a real export cover from the final render; never a fabricated image.
+    try:
+        cover=final.parent/f'attempt-{attempt:02d}-cover.jpg'
+        run([ff,'-y','-ss','1.0','-i',str(final),'-frames:v','1',
+             '-q:v','3',str(cover)],timeout=25)
+    except IntegrationError as exc:
+        db.log_event(video['id'],'media','COVER_FAILED',str(exc)[:300])
     stream=next(s for s in info['streams'] if s['codec_type']=='video')
     db.artifact(video['id'],'editor',data={'executed':['cenário por cena','narracao','legendas','origem dos assets','H.264/AAC'],
         'ignored':[],'failures':[],'duration':float(info['format']['duration']),
         'resolution':[stream['width'],stream['height']],'codec':stream['codec_name'],
         'bytes':final.stat().st_size,'test_audio':bool(video['test']),
         'visual_manifest':f'handoff/{video["id"]}/visual-assets.json',
-        'subtitle_timing':'whisper_words' if transcript else 'estimated_by_phrase'},
+        'subtitle_timing':(transcript.get('method') if transcript else 'synthetic_test_only'),
+        'audio_timeline':f'videos/processing/{video["id"]}/attempt-{attempt:02d}/audio-timeline.json'},
         files=[str(final.relative_to(db.ROOT)),f'handoff/{video["id"]}/visual-assets.json'],next_agent='avaliador')
     return final
 
@@ -216,8 +259,11 @@ def technical_check(path, expected_duration):
             failures.append('Duração divergente do briefing.')
         run([binary('ffmpeg'), '-v', 'error', '-xerror', '-i', str(path), '-f', 'null', '-'], timeout=180)
         result = subprocess.run([binary('ffmpeg'), '-i', str(path), '-af', 'silencedetect=noise=-40dB:d=2', '-f', 'null', '-'], capture_output=True, timeout=180)
-        if b'silence_start:' in result.stderr:
-            failures.append('Silêncio prolongado detectado; revisar áudio.')
+        # Planned voice-free outro is intentional and must not be a technical failure.
+        begins=[float(v) for v in re.findall(rb'silence_start:\s*([0-9.]+)',result.stderr)]
+        boundary=max(0,expected_duration-db.settings().narration_margin_seconds)
+        if any(v < boundary-0.5 for v in begins):
+            failures.append('Silêncio prolongado antes do fechamento planejado.')
         return {'valid': not failures, 'failures': failures, 'duration': duration, 'resolution': [v.get('width'), v.get('height')]}
     except (IntegrationError, ValueError, KeyError, subprocess.TimeoutExpired):
         return {'valid': False, 'failures': ['Arquivo inválido, ilegível ou não decodificável.']}

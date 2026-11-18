@@ -95,6 +95,17 @@ def scheduler():
     now = time.time()
     if config.emergency_stop:
         return
+    # Lightweight polling watcher works for bind-mounted /assets on Windows,
+    # where inotify events are not reliable across Docker Desktop volumes.
+    if now - db.get_setting('last_asset_scan',0) > 30:
+        from backend.assets import sync_library
+        try:
+            result=sync_library()
+            db.put_setting('last_asset_scan',now)
+            if result.get('registered'):
+                logging.info(json.dumps({'assets_registered':result['registered']},ensure_ascii=False))
+        except Exception as exc:
+            db.log_event(None,'assets','SCAN_ERROR',str(exc)[:350])
     last = db.get_setting('maintenance', 0)
     if now - last > 3600:
         db.enqueue('maintenance', unique_key=f'maintenance:{int(now // 3600)}')

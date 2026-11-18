@@ -61,7 +61,7 @@ def create_session(item):
     kind=validate_type(item.filename,item.category)
     limit=db.settings().upload_max_mb*1024*1024
     if item.size<=0 or item.size>limit:raise ValueError(f'Tamanho inválido; máximo configurado: {db.settings().upload_max_mb} MB.')
-    if item.source_class not in ('OWNED_GENERATED','OFFICIAL','THIRD_PARTY'):
+    if item.source_class not in ('OWNED_GENERATED','OFFICIAL','FREE_LICENSE','THIRD_PARTY'):
         raise ValueError('Origem inválida.')
     if not re.fullmatch('[a-fA-F0-9]{64}',item.fingerprint):raise ValueError('Identificador de upload inválido.')
     found=db.rows("""SELECT * FROM upload_sessions WHERE sha256=:fp AND filename=:filename
@@ -75,14 +75,15 @@ def create_session(item):
         db.execute("UPDATE upload_sessions SET received=:n,state='UPLOADING' WHERE id=:id",
             {'n':bytes_now,'id':session['id']})
         return {'id':session['id'],'offset':bytes_now,'size':item.size,'resumed':True}
-    # Recover the complete .part from an earlier failed EXDEV completion.
+    # Recover the complete .part created by the previous EXDEV bug without
+    # forcing a 459 MB re-upload. Only the matching session may be resumed.
     failed=db.rows("SELECT id FROM upload_sessions WHERE sha256=:fp AND filename=:filename AND size_bytes=:size AND state='FAILED' ORDER BY updated DESC LIMIT 1",
       {'fp':item.fingerprint,'filename':item.filename,'size':item.size})
     if failed:
         prior=_session_path(failed[0]['id'])
         if prior.is_file() and prior.stat().st_size<=item.size:
             db.execute("UPDATE upload_sessions SET state='UPLOADING',error=NULL,received=:n,updated=:now WHERE id=:id",
-              {'id':failed[0]['id'],'n':prior.stat().st_size,'now':time.time()})
+                {'id':failed[0]['id'],'n':prior.stat().st_size,'now':time.time()})
             return {'id':failed[0]['id'],'offset':prior.stat().st_size,'size':item.size,'resumed':True}
     writing=db.rows("SELECT id,updated FROM upload_sessions WHERE sha256=:fp AND filename=:filename AND size_bytes=:size AND state='WRITING' LIMIT 1",{'fp':item.fingerprint,'filename':item.filename,'size':item.size})
     if writing and time.time()-writing[0]['updated']<180:
@@ -161,35 +162,27 @@ def check_format(path,media_type):
 
 
 def promote_across_volumes(source: Path, destination: Path) -> None:
-    """Commit to a different bind-mounted volume without EXDEV and without data loss."""
-    destination.parent.mkdir(parents=True,exist_ok=True)
+    """Safely commit an uploaded original even when temp and assets are mounts.
+
+    The incoming file is copied to a sibling staging file on the DESTINATION
+    filesystem, fsynced, and atomically renamed there. The original partial is
+    removed only after the destination is committed. No hardlink or EXDEV-prone
+    rename of the source is attempted.
+    """
+    destination.parent.mkdir(parents=True, exist_ok=True)
     if destination.exists():
-        # A crash may happen after the successful destination commit but before
-        # the DB transaction. Idempotent completion is safe only if bytes match.
-        if source.is_file() and source.stat().st_size==destination.stat().st_size:
-            import hashlib
-            def digest(path):
-                result=hashlib.sha256()
-                with path.open('rb') as stream:
-                    for block in iter(lambda:stream.read(4*1024*1024),b''):
-                        result.update(block)
-                return result.digest()
-            if digest(source)==digest(destination):
-                try:source.unlink()
-                except OSError:pass
-                return
-        raise FileExistsError('Destino existente com conteúdo diferente: não sobrescrever original.')
-    staging=destination.with_name(destination.name+'.incoming-'+db.uid())
+        raise FileExistsError('O destino do upload já existe; não substituiremos um original.')
+    staging = destination.with_name(destination.name + '.incoming-' + db.uid())
     try:
-        with source.open('rb') as reader, staging.open('xb') as writer:
-            shutil.copyfileobj(reader,writer,length=4*1024*1024)
-            writer.flush()
-            os.fsync(writer.fileno())
-        if staging.stat().st_size!=source.stat().st_size:
-            raise OSError('Cópia incompleta entre volumes, original temporário preservado.')
-        os.replace(staging,destination)  # same destination filesystem
-        try:source.unlink()
-        except OSError:pass  # successful destination must not be lost over cleanup
+        with source.open('rb') as src, staging.open('xb') as out:
+            shutil.copyfileobj(src, out, length=4 * 1024 * 1024)
+            out.flush()
+            os.fsync(out.fileno())
+        if staging.stat().st_size != source.stat().st_size:
+            raise OSError('Cópia incompleta ao mover o upload entre volumes.')
+        # Both paths live under destination.parent: atomic on the same filesystem.
+        os.replace(staging, destination)
+        source.unlink()
     finally:
         staging.unlink(missing_ok=True)
 

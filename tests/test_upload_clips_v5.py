@@ -104,7 +104,7 @@ def test_visual_selection_avoids_same_clip(client,tmp_path):
     vis=select_visuals(db.rows('SELECT * FROM videos WHERE id=:id',{'id':video_id})[0],script)
     assert len(vis)==2
     parts=[seg for row in vis for seg in row['segments']]
-    assert len(parts)==4 and all(2<=p['duration']<=4 for p in parts)
+    assert len(parts)==6 and all(1.5<=p['duration']<=3 for p in parts)  # corte rápido v8
     assert all(p['asset_id'] in (a['id'],b['id']) for p in parts)
     assert all(x['asset_id']!=y['asset_id'] for x,y in zip(parts,parts[1:]))
     assert all((db.ROOT/p['path']).is_file() for p in parts)

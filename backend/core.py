@@ -14,7 +14,7 @@ from backend.contracts import Settings, Handoff
 ROOT = Path(os.getenv('STUDIO_FILES', '.')).resolve()
 DATA = Path(os.getenv('STUDIO_DATA', str(ROOT / 'data'))).resolve()
 DATA.mkdir(parents=True, exist_ok=True)
-for folder in ['handoff', 'videos/raw', 'videos/processing', 'videos/final', 'output', 'reports', 'cache', 'logs', 'assets/shorts', 'assets/gameplay', 'assets/images', 'assets/persona', 'assets/clips', 'assets/uploads/video', 'assets/uploads/audio', 'assets/uploads/image', 'assets/uploads/font', 'assets/uploads/subtitle', 'assets/uploads/logo', 'temp']:
+for folder in ['handoff', 'videos/raw', 'videos/processing', 'videos/final', 'output', 'reports', 'cache', 'logs', 'assets/shorts', 'assets/gameplay', 'assets/images', 'assets/persona', 'assets/personas', 'assets/music', 'assets/sfx', 'assets/clips', 'assets/uploads/video', 'assets/uploads/audio', 'assets/uploads/image', 'assets/uploads/font', 'assets/uploads/subtitle', 'assets/uploads/logo', 'temp']:
     (ROOT / folder).mkdir(parents=True, exist_ok=True)
 engine = create_engine('sqlite:///' + str(DATA / 'studio.sqlite'), connect_args={'timeout': 30})
 

@@ -164,30 +164,34 @@ def capture_article(video) -> dict:
             (folder/'article.html').write_text(page.content()[:250_000],encoding='utf-8')
             page.add_style_tag(content='''[id*="cookie"],[class*="cookie"],[class*="advert"],
                 [class*="popup"],[role="dialog"],iframe,header,footer,nav{display:none!important;}''')
-            for kind,loc in [('headline','h1'),('excerpt','article p')]:
-                matches=page.locator(loc)
-                if matches.count():
-                    node=matches.first
-                    if node.is_visible():
-                        text=node.inner_text(timeout=4000).strip()[:220]
-                        if text:
-                            path=folder/f'article-{kind}.png'
-                            node.screenshot(path=str(path),timeout=7000,animations='disabled')
-                            result['assets'].append({'path':str(path.relative_to(db.ROOT)),
-                                'kind':kind,'excerpt':text,'source':url,
-                                'source_class':'THIRD_PARTY','rights_status':'REVIEW_REQUIRED'})
-            images=page.locator('article img')
-            if images.count():
-                picture=images.first
-                if picture.is_visible():
+            # Capture only brief identified excerpts, never entire paywalled articles.
+            for kind,selector,limit in [('headline','h1',1),('excerpt','article p',3)]:
+                matches=page.locator(selector)
+                for n in range(min(limit,matches.count())):
+                    node=matches.nth(n)
+                    if not node.is_visible():continue
                     try:
-                        path=folder/'article-image.png'
-                        picture.screenshot(path=str(path),timeout=7000,animations='disabled')
+                        text=node.inner_text(timeout=4000).strip()[:240]
+                        if not text:continue
+                        path=folder/f'article-{kind}-{n}.png'
+                        node.screenshot(path=str(path),timeout=7000,animations='disabled')
                         result['assets'].append({'path':str(path.relative_to(db.ROOT)),
-                            'kind':'article-image','excerpt':str(picture.get_attribute('alt') or '')[:120],
-                            'source':url,'source_class':'THIRD_PARTY','rights_status':'REVIEW_REQUIRED'})
+                            'kind':kind,'excerpt':text,'source':url,
+                            'source_class':'THIRD_PARTY','rights_status':'REVIEW_REQUIRED'})
                     except Exception as exc:
-                        _log(video['id'],'ARTICLE_IMAGE_FAILED',str(exc)[:200])
+                        _log(video['id'],'ARTICLE_EXCERPT_FAILED',str(exc)[:180])
+            pictures=page.locator('article img')
+            for n in range(min(3,pictures.count())):
+                picture=pictures.nth(n)
+                if not picture.is_visible():continue
+                try:
+                    path=folder/f'article-image-{n}.png'
+                    picture.screenshot(path=str(path),timeout=7000,animations='disabled')
+                    result['assets'].append({'path':str(path.relative_to(db.ROOT)),
+                        'kind':'article-image','excerpt':str(picture.get_attribute('alt') or '')[:160],
+                        'source':url,'source_class':'THIRD_PARTY','rights_status':'REVIEW_REQUIRED'})
+                except Exception as exc:
+                    _log(video['id'],'ARTICLE_IMAGE_FAILED',str(exc)[:200])
             browser.close()
             result['status']='CAPTURED' if result['assets'] else 'FALLBACK'
     except Exception as exc:

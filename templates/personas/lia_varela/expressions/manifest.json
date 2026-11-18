@@ -1,0 +1,199 @@
+{
+  "personagem": "lia_varela",
+  "width": 1024,
+  "height": 1536,
+  "images": [
+    {
+      "index": 1,
+      "emotion": "neutro",
+      "file": "01_neutro.png",
+      "description": "neutro",
+      "active": true,
+      "sha256": "8d29f0e185da5c5d3cb5c17c4facad6d5e08d2ad8749f5fca3d7780b337ccccd"
+    },
+    {
+      "index": 2,
+      "emotion": "feliz",
+      "file": "02_feliz.png",
+      "description": "feliz",
+      "active": true,
+      "sha256": "7e8be16248e3a05024fcc3eec2ce88dff25c50b6c60d3632a04dbe9cb5013595"
+    },
+    {
+      "index": 3,
+      "emotion": "rindo",
+      "file": "03_rindo.png",
+      "description": "rindo",
+      "active": true,
+      "sha256": "b899e6146d8148792d07b46ebe1d72836924a70aa255575a06e41a093dc1c790"
+    },
+    {
+      "index": 4,
+      "emotion": "empolgado",
+      "file": "04_empolgado.png",
+      "description": "empolgado",
+      "active": true,
+      "sha256": "ed190431b57e9f822b620fe391b2ece73622bb73ac42fa3de6f7ec19a49c26e1"
+    },
+    {
+      "index": 5,
+      "emotion": "surpreso",
+      "file": "05_surpreso.png",
+      "description": "surpreso",
+      "active": true,
+      "sha256": "384e12b4652329ee6d11aaf0ed00b6140c3e1e6d7508482ea353258ef69238f5"
+    },
+    {
+      "index": 6,
+      "emotion": "chocado",
+      "file": "06_chocado.png",
+      "description": "chocado",
+      "active": true,
+      "sha256": "ddfb43d433ad256aa68c5e94c5a1788b30284b627a3aa41afc435cb89f90719e"
+    },
+    {
+      "index": 7,
+      "emotion": "confuso",
+      "file": "07_confuso.png",
+      "description": "confuso",
+      "active": true,
+      "sha256": "f4c2baf9326bf5c54db380e97ae726fe7a3dfe5096205ab3d219a60cf6764422"
+    },
+    {
+      "index": 8,
+      "emotion": "pensativo",
+      "file": "08_pensativo.png",
+      "description": "pensativo",
+      "active": true,
+      "sha256": "f1dbe5581f9851e457510720d173ac8bfb065bebc0f5240707d31f2024797fbe"
+    },
+    {
+      "index": 9,
+      "emotion": "cetico",
+      "file": "09_cetico.png",
+      "description": "cetico",
+      "active": true,
+      "sha256": "866bdf6dad792d6140ff2053cd95f681167fbc36dfc2f26b58c55771e69eb230"
+    },
+    {
+      "index": 10,
+      "emotion": "irritado",
+      "file": "10_irritado.png",
+      "description": "irritado",
+      "active": true,
+      "sha256": "f7801dc04006f989becebcb419d95f58192b1bdd69a8778c87f0f81a07255a02"
+    },
+    {
+      "index": 11,
+      "emotion": "triste",
+      "file": "11_triste.png",
+      "description": "triste",
+      "active": true,
+      "sha256": "260a254ce6cf92906a6f1ab1d3bd8cdee37f9b40d391a60448c353ec20f933c9"
+    },
+    {
+      "index": 12,
+      "emotion": "entediado",
+      "file": "12_entediado.png",
+      "description": "entediado",
+      "active": true,
+      "sha256": "82c9f82947b369a68d8a39af45ac51bdf815275eb7bd3173f45844e8d4425ab4"
+    },
+    {
+      "index": 13,
+      "emotion": "apontando_direita",
+      "file": "13_apontando_direita.png",
+      "description": "apontando direita",
+      "active": true,
+      "sha256": "1ffffcee2461ee80b1beeb55b3f03a8b319ef6850abe751c27ec2229f6beb4ab"
+    },
+    {
+      "index": 14,
+      "emotion": "apontando_esquerda",
+      "file": "14_apontando_esquerda.png",
+      "description": "apontando esquerda",
+      "active": true,
+      "sha256": "564d164a49d6123d15eb31438f559448417d595b0aeafb3bec1a6db394bbe9ee"
+    },
+    {
+      "index": 15,
+      "emotion": "apontando_cima",
+      "file": "15_apontando_cima.png",
+      "description": "apontando cima",
+      "active": true,
+      "sha256": "fadc1fb1b6c535e284fe8d3992e822b1b73b51a2d8737e94196b4e4eb463cac5"
+    },
+    {
+      "index": 16,
+      "emotion": "joinha",
+      "file": "16_joinha.png",
+      "description": "joinha",
+      "active": true,
+      "sha256": "42a02be39bc7284b4bbb5120f2e8439da383e0c87af0c06a7b042ba513b9e7d8"
+    },
+    {
+      "index": 17,
+      "emotion": "bracos_cruzados",
+      "file": "17_bracos_cruzados.png",
+      "description": "bracos cruzados",
+      "active": true,
+      "sha256": "aa92b0abdc18217328152c922d9c8e438aa26bb03baa3d3e94dae835ad27e156"
+    },
+    {
+      "index": 18,
+      "emotion": "dando_ombros",
+      "file": "18_dando_ombros.png",
+      "description": "dando ombros",
+      "active": true,
+      "sha256": "cfbfad5f7982d96079c687b11ecfbb2d681ad6f3ce508169ca07bcfb55dd3ac2"
+    },
+    {
+      "index": 19,
+      "emotion": "piscando",
+      "file": "19_piscando.png",
+      "description": "piscando",
+      "active": true,
+      "sha256": "87418a490a70c6581caa3281914709fe300ec36398c2da9ff5e8536874c75e6d"
+    },
+    {
+      "index": 20,
+      "emotion": "sussurrando",
+      "file": "20_sussurrando.png",
+      "description": "sussurrando",
+      "active": true,
+      "sha256": "f5b1e2092f1a547cca6e83b3b0ef3b045779adf066489934de5a980ff1f72f24"
+    },
+    {
+      "index": 21,
+      "emotion": "comemorando",
+      "file": "21_comemorando.png",
+      "description": "comemorando",
+      "active": true,
+      "sha256": "63cc5b4d722f95f1ca19bb47047a30cd13a8ec72ba7da747ea08821a8133fcdb"
+    },
+    {
+      "index": 22,
+      "emotion": "ultimo_minuto",
+      "file": "22_ultimo_minuto.png",
+      "description": "ultimo minuto",
+      "active": true,
+      "sha256": "6d186477cba63fd8467da3e9e72d85cb3fa4c65dff6800984d313f4685ddd818"
+    },
+    {
+      "index": 23,
+      "emotion": "acenando",
+      "file": "23_acenando.png",
+      "description": "acenando",
+      "active": true,
+      "sha256": "bb3ff9d5a915211ce3ff14e7531d93095557a19dbb250bec4ef6b8730f341d63"
+    },
+    {
+      "index": 24,
+      "emotion": "chamando_comentar",
+      "file": "24_chamando_comentar.png",
+      "description": "chamando comentar",
+      "active": true,
+      "sha256": "0cf2fdd9d8c571466d50219a6b96872b24ebfd2a4e24ef771c3c55bf833b27a3"
+    }
+  ]
+}

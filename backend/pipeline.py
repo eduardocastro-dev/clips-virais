@@ -1,8 +1,11 @@
 import hashlib
 import json
+import re
 import shutil
 import time
 from pathlib import Path
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from backend import core as db, media, highlights, production_media, storyboard
@@ -10,7 +13,7 @@ from backend.contracts import ImportRequest, Script, platform_url
 from backend.integrations import IntegrationError, metadata, viral_score, llm
 
 
-AGENTS = ['diretor', 'cacador', 'escritor', 'editor', 'avaliador']
+AGENTS = ['diretor', 'cacador', 'escritor', 'redator', 'editor', 'avaliador']
 
 
 def download_authorized(video):
@@ -110,7 +113,7 @@ def hunt(video):
                            {'duration':new_duration,'id':video['id']})
     db.execute('UPDATE videos SET metadata=:meta,title=:title WHERE id=:id', dict(meta=json.dumps(meta), title=meta['title'], id=video['id']))
     db.artifact(video['id'], 'cacador', data={**meta, 'rights': video['rights'], 'evidence': video['evidence'],
-        'credits': video['credits'], 'viral_score': viral_score(meta), 'score_method': 'views/hour + engagement + recency; no source baseline available'}, next_agent='escritor')
+        'credits': video['credits'], 'viral_score': viral_score(meta), 'today_sao_paulo':db.today(), 'score_method': 'views/hour + engagement + recency; no source baseline available'}, next_agent='escritor')
 
 
 def write_script(video, corrections=None):
@@ -125,6 +128,10 @@ def write_script(video, corrections=None):
                 {'start': 5, 'end': 10, 'text': 'PIPELINE EM OPERAÇÃO', 'narration': 'Handoffs, renderização e avaliação. Nenhuma notícia é apresentada.', 'source_id': video['id']}])
     else:
         from backend.personas import get_persona
+        from backend.facts import extract
+        fact_ledger=extract(video,source)
+        db.atomic(db.ROOT/'handoff'/video['id']/'facts.json',
+                  json.dumps(fact_ledger,ensure_ascii=False,indent=2))
         persona=get_persona()
         clip_file=db.ROOT/'handoff'/video['id']/'highlights.json'
         clip_analysis=json.loads(clip_file.read_text('utf-8')) if clip_file.exists() else None
@@ -140,15 +147,24 @@ def write_script(video, corrections=None):
         script=None
         for repair in range(3):
             try:
-                result=llm('escritor',video['id'],{'source':source,'id':video['id'],
-                    'persona':persona,'highlight_analysis':clip_analysis,
+                result=llm('escritor',video['id'],{'source':source,'facts':fact_ledger,'id':video['id'],
+                    'persona':persona,'cast':__import__('backend.personas',fromlist=['get_cast']).get_cast(),
+                    'available_speakers':[k for k,v in __import__('backend.personas',fromlist=['get_cast']).get_cast().items() if v.get('production_ready')],
+                    'two_hosts_requested':(int(hashlib.sha256(video['id'].encode()).hexdigest()[:8],16)%3==0 and
+                     sum(bool(v.get('production_ready')) for v in __import__('backend.personas',fromlist=['get_cast']).get_cast().values())>=2),
+                    'today_sao_paulo':db.today(),'highlight_analysis':clip_analysis,
                     'instructions':video['instructions'],'duration':requested_duration,
                     'template':video['template'],'corrections':(corrections or [])+failures,
                     'repair_attempt':repair,
                     'constraints':'A pessoa narradora é ficcional, não copie personagens conhecidos. '
-                    'Fatos verificados separados de rumores. Notícias em comentário original, não copiar matérias. '
+                    'Evidências e atribuição verificadas internamente, nunca selos de fato/rumor na tela. Notícias em comentário original. '
                     'Cada cena precisa ter narração e texto, com tempo coerente e sem contradições. '
-                    'Conteúdo de terceiros é apenas referência salvo licença documentada.'},
+                    'Conteúdo de terceiros é apenas referência salvo licença documentada. '
+                    'Gancho nos primeiros dois segundos; frases de até 14 palavras, 2 a 4 ideias, análise ágil e pergunta final. '
+                    'Cada cena precisa marcar speaker dentre available_speakers SOMENTE (não selecione personagens sem arte aprovada). '
+                    'Marque emotion nas cenas dentre as 24 poses conhecidas. '
+                    'Narração limitada à duração do template menos a margem configurada, cerca de 2,5 palavras/s. '+
+                    __import__('backend.editorial_style',fromlist=['WRITER_STYLE']).WRITER_STYLE},
                     Script.model_json_schema(),images=vision_frames)
                 normalized,fixes=storyboard.normalize(result,requested_duration,video['template'],video['id'])
                 script=Script.model_validate(normalized)
@@ -188,7 +204,7 @@ def write_script(video, corrections=None):
     db.atomic(folder / 'script.json', script.model_dump_json(indent=2))
     briefing = [f'# {script.title}', f'Identificação: {video["id"]}', 'Objetivo: comentário original PT-BR baseado nas fontes registradas.',
                 f'Duração: {script.duration}s', f'Gancho: {script.hook}', f'Template: {script.template}',
-                'Narração: Piper PT-BR (sinal de teste na homologação).', 'Música: nenhuma.', 'Legendas: frases de seis palavras; fade 70ms.',
+                'Narração: Piper PT-BR (sinal de teste na homologação).', 'Música: biblioteca autorizada com ducking obrigatório.', 'Legendas: alinhamento pelo áudio real.',
                 'Enquadramento: centro, corte vertical 1080×1920. Transições: fade de texto 150ms.',
                 f'Materiais: {video["rights"]}; fonte {video["url"]}; créditos {video["credits"]}', '## Alterações e roteiro']
     for i, s in enumerate(script.scenes, 1):
@@ -196,84 +212,13 @@ def write_script(video, corrections=None):
     briefing += [f'CTA: {script.cta}', f'Descrição: {script.description}', 'Hashtags: ' + ' '.join(script.hashtags)]
     db.atomic(folder / f'escritor_{video["id"]}.md', '\n'.join(briefing))
     db.execute('UPDATE videos SET script_hash=:hash,title=:title WHERE id=:id', dict(hash=fingerprint, title=script.title, id=video['id']))
-    db.artifact(video['id'], 'escritor', files=[str((folder / 'script.json').relative_to(db.ROOT)), str((folder / f'escritor_{video["id"]}.md').relative_to(db.ROOT))], next_agent='editor')
+    db.artifact(video['id'], 'escritor', files=[str((folder / 'script.json').relative_to(db.ROOT)), str((folder / f'escritor_{video["id"]}.md').relative_to(db.ROOT))], next_agent='redator')
     return script
 
 
 def evaluate(video, script, final):
-    config = db.settings()
-    criteria = config.evaluation_criteria
-    technical = media.technical_check(final, script.duration)
-    rights_ok = video['rights'] == 'REFERENCE_ONLY' or (video['rights'] == 'AUTHORIZED' and bool(video['evidence']))
-    hard_failures = technical['failures'] + ([] if rights_ok else ['Direitos de reutilização não comprovados.'])
-    audio_check = None
-    if hard_failures:
-        review = None
-        scores = {}
-        summary = 'Falha técnica ou de direitos impede a aprovação automática.'
-        corrections = hard_failures
-    elif video['test']:
-        review=None
-        scores={key:10.0 for key,c in criteria.items() if c.enabled}
-        corrections=[]
-        summary='Teste técnico sintético aprovado; não comprova fatos sobre GTA 6.'
-    else:
-        frames = media.samples(final, video['id'])
-        visual = config.routes['avaliador'].vision
-        audio_check = media.transcript_check(final, script) if config.transcription else None
-        source = db.read_artifact(video['id'], 'cacador').dados
-        review = Review.model_validate(llm('avaliador', video['id'], {
-            'script': script.model_dump(), 'source': source,
-            'technical': technical, 'editor': db.read_artifact(video['id'], 'editor').dados,
-            'sampled_frames': [str(p.relative_to(db.ROOT)) for p in frames],
-            'audio_check': audio_check,
-            'evaluation_rubric': {key:c.model_dump() for key,c in criteria.items() if c.enabled},
-            'rules': 'Return a 0-10 score for every enabled criterion using its exact key. '
-                     'Cite concrete evidence, and specific improvements. Lack of independent visual '
-                     'confirmation does not prove a false claim: suggest rewriting uncertain statements '
-                     'as rumor or require manual review. Fair use is not a license and mentioning it '
-                     'alone must not trigger a rejection. Do not claim to have seen frames when images '
-                     'were not attached.'}, Review.model_json_schema(), images=frames[:6] if visual else None))
-        scores=review.scores
-        if any(not 0 <= score <= 10 for score in scores.values()):
-            raise IntegrationError('Notas de avaliação inválidas.')
-        corrections=list(review.corrections)
-        summary=review.summary
-        if audio_check and not audio_check['valid']:
-            corrections.append('Narração transcrita diverge do briefing.')
-    breakdown={}
-    weighted=0.0;weight=0.0;threshold_failures=[]
-    for key,c in criteria.items():
-        val=scores.get(key)
-        passed=None if val is None else val >= c.min_score
-        breakdown[key]={**c.model_dump(), 'score':val, 'passed':passed}
-        if c.enabled:
-            if val is None:
-                threshold_failures.append(f'{c.name}: nota não fornecida.')
-            else:
-                weighted+=c.weight*val;weight+=c.weight
-                if not passed:
-                    threshold_failures.append(f'{c.name}: {val:.1f} abaixo do mínimo {c.min_score:.1f}.')
-    score=round(weighted/weight,2) if weight else 0.0
-    factual_ok = review.factual_supported if review else bool(video['test'])
-    original_ok = review.original if review else bool(video['test'])
-    if review and not factual_ok:
-        threshold_failures.append('Afirmações sem suporte; reescrever ou confirmar com fonte verificável.')
-    if review and not original_ok:
-        threshold_failures.append('Originalidade insuficiente; produzir roteiro e estrutura próprios.')
-    if score < config.approval_score:
-        threshold_failures.append(f'Nota geral {score:.1f} inferior ao mínimo {config.approval_score:.1f}.')
-    corrections=list(dict.fromkeys(corrections+threshold_failures+hard_failures))
-    verdict = 'APROVADO' if not corrections and not hard_failures else ('REPROVADO' if hard_failures else 'REVISAR')
-    result={'verdict':verdict,'score':score,'scores':scores,'criteria':breakdown,'summary':summary,
-            'reason_full':'\n'.join(corrections) if corrections else summary,
-            'corrections':corrections,'hard_blocks':bool(hard_failures),
-            'requires_human_audiovisual_review': not (config.routes['avaliador'].vision and audio_check and audio_check.get('valid')),
-            'technical':technical,'factual_supported':factual_ok,'original':original_ok}
-    db.artifact(video['id'], 'avaliador', data=result,
-                status='CONCLUIDO' if verdict=='APROVADO' else verdict,
-                next_agent='diretor' if verdict=='APROVADO' else 'escritor')
-    return result
+    from backend.evaluation import evaluate as evaluate_pair
+    return evaluate_pair(video,script,final)
 
 
 def store_attempt(video_id, attempt, result, final=None, error=None):
@@ -287,7 +232,7 @@ def store_attempt(video_id, attempt, result, final=None, error=None):
            score=result.get('score'),details=json.dumps(result,ensure_ascii=False),path=path,error=error,now=stamp))
     db.atomic(db.ROOT/'handoff'/video_id/f'review-{attempt}.json',json.dumps(result,ensure_ascii=False,indent=2))
     folder=db.ROOT/'handoff'/video_id
-    for name in ('script.json','escritor.json','editor.json','avaliador.json'):
+    for name in ('script.json','escritor.json','redator.json','editor.json','avaliador.json'):
         source=folder/name
         if source.is_file():
             shutil.copy2(source,folder/f'{source.stem}-attempt-{attempt}{source.suffix}')
@@ -320,6 +265,66 @@ def approve_rendered(video_id, manual=False, by='local_operator'):
     production_media.remove_workspace(video_id)
 
 
+
+def preserve_unaffected_scenes(video_id, new_script, previous_details, previous_attempt):
+    """Keep approved, unaffected scenes byte-for-byte when failures are localized.
+
+    We only do partial regeneration if every blocking issue has a time/scene
+    reference. If an issue is structural or has no location, full-script repair
+    remains available; silently guessing a scene would be unsafe.
+    """
+    if not previous_attempt or not previous_details:
+        return new_script
+    old_path=db.ROOT/'handoff'/video_id/f'script-attempt-{previous_attempt}.json'
+    if not old_path.is_file():
+        return new_script
+    previous=Script.model_validate_json(old_path.read_text('utf-8'))
+    if len(previous.scenes)!=len(new_script.scenes):
+        return new_script
+    issues=previous_details.get('issues') or []
+    if not issues:
+        return new_script
+    targets=set()
+    for item in issues:
+        ev=str(item.get('evidence') or '')
+        matched=False
+        for number in re.findall(r'(?i)cena\s*(\d+)',ev):
+            idx=int(number)-1
+            if 0<=idx<len(previous.scenes):
+                targets.add(idx);matched=True
+        for second in re.findall(r'(?<![\w.])(\d+(?:[.,]\d+)?)\s*s\b',ev):
+            position=float(second.replace(',','.'))
+            for idx,scene in enumerate(previous.scenes):
+                if scene.start<=position<scene.end:
+                    targets.add(idx);matched=True
+        if not matched:
+            # Without concrete evidence, do not edit arbitrary scenes.
+            return new_script
+    if not targets or len(targets)>=len(previous.scenes):
+        return new_script
+    result=new_script.model_dump()
+    old=previous.model_dump()
+    for idx in range(len(result['scenes'])):
+        if idx not in targets:
+            result['scenes'][idx]=old['scenes'][idx]
+        else:
+            # Keep scene boundaries fixed; partial TTS changes must not move
+            # other scenes or invalidate previously approved cut timestamps.
+            result['scenes'][idx]['start']=old['scenes'][idx]['start']
+            result['scenes'][idx]['end']=old['scenes'][idx]['end']
+    result['duration']=old['duration'];result['template']=old['template']
+    revised=Script.model_validate(result)
+    folder=db.ROOT/'handoff'/video_id
+    db.atomic(folder/'script.json',revised.model_dump_json(indent=2))
+    db.atomic(folder/f'surgical-attempt-{previous_attempt+1}.json',json.dumps({
+        'from_attempt':previous_attempt,'edited_scenes':[n+1 for n in sorted(targets)],
+        'preserved_scenes':[n+1 for n in range(len(previous.scenes)) if n not in targets],
+        'reason':'Somente cenas com evidência temporal foram reescritas.'},ensure_ascii=False,indent=2))
+    db.log_event(video_id,'redator','SURGICAL_REVISION',
+                 'Refação apenas nas cenas '+', '.join(str(n+1) for n in sorted(targets)))
+    return revised
+
+
 def run_pipeline(video_id):
     video = db.rows('SELECT * FROM videos WHERE id=:id', {'id': video_id})[0]
     if video['manual_decision'] in ('discard','approved'):
@@ -336,7 +341,8 @@ def run_pipeline(video_id):
         hunt(video)
     previous=db.rows('SELECT attempt,details FROM video_attempts WHERE video_id=:id ORDER BY attempt DESC LIMIT 1',{'id':video_id})
     next_attempt=(previous[0]['attempt']+1) if previous else 1
-    corrections=json.loads(previous[0]['details']).get('corrections',[]) if previous else None
+    previous_details=json.loads(previous[0]['details']) if previous else {}
+    corrections=previous_details.get('corrections',[]) if previous else None
     for attempt in range(next_attempt,config.max_review_attempts+1):
         if decision(video_id) in ('discard','approved'):
             return
@@ -345,12 +351,36 @@ def run_pipeline(video_id):
         try:
             stage(video_id,'escritor')
             script=write_script(video,corrections)
+            stage(video_id,'redator')
+            from backend.redator import polish
+            script=polish(video,script,attempt)
+            if attempt>1:
+                script=preserve_unaffected_scenes(video_id,script,previous_details,attempt-1)
             stage(video_id,'editor')
-            final=media.render(video,script,attempt=attempt)
+            # TTS measurements are technical preflight, not evaluation rounds.
+            from backend.audio_timeline import TimingBudgetError
+            for correction_round in range(3):
+                try:
+                    final=media.render(video,script,attempt=attempt)
+                    break
+                except TimingBudgetError as timing_error:
+                    if correction_round>=2:
+                        raise media.PreflightError('Após dois ajustes do Redator, narração ainda fora do orçamento real: '+str(timing_error))
+                    from backend.redator import adjust_timing
+                    script=adjust_timing(video,script,timing_error,attempt,correction_round+1)
             # Persist each render before scoring so even rejected files can be previewed.
             db.execute("UPDATE videos SET final_path=:path,render_error=NULL,updated=:now WHERE id=:id AND "
                        "(manual_decision IS NULL OR manual_decision='approve_pending')",
                        {'path':str(final.relative_to(db.ROOT)),'now':time.time(),'id':video_id})
+            # Decode and check the REAL output before any LLM review; technical
+            # failures pause the production and do not count as review attempts.
+            technical=media.technical_check(final,script.duration)
+            if not technical['valid']:
+                message='Pré-avaliação técnica: '+'; '.join(technical['failures'])
+                db.execute("UPDATE videos SET status='PIPELINE_ERROR',stage='editor',error=:error,updated=:now WHERE id=:id",
+                           {'error':message,'now':time.time(),'id':video_id})
+                db.log_event(video_id,'editor','PREFLIGHT_ERROR',message)
+                return
             if decision(video_id)=='discard':
                 return
             if decision(video_id)=='approve_pending':
@@ -362,15 +392,38 @@ def run_pipeline(video_id):
             result=evaluate(video,script,final)
         except PipelineInterrupted:
             return
-        except (media.BriefingError,IntegrationError) as exc:
+        except __import__('backend.assets',fromlist=['MissingAssetsError']).MissingAssetsError as exc:
+            # A missing resource is not a failed review attempt. Leave all attempts unchanged.
+            db.execute("UPDATE videos SET status='PAUSED_MISSING_ASSETS',stage='editor',error=:error,updated=:now WHERE id=:id",
+                       {'error':str(exc),'now':time.time(),'id':video_id})
+            db.log_event(video_id,'editor','MISSING_ASSETS',str(exc))
+            db.notify('missing-assets:'+video_id,str(exc))
+            return
+        except media.PreflightError as exc:
+            db.execute("UPDATE videos SET status='PIPELINE_ERROR',stage='editor',error=:error,updated=:now WHERE id=:id",
+                       {'error':str(exc),'now':time.time(),'id':video_id})
+            db.log_event(video_id,'editor','PREFLIGHT_ERROR',str(exc))
+            return
+        except media.BriefingError as exc:
+            # An actual creative inconsistency (not a broken decoder/FFmpeg/TTS)
+            # returns to the Escritor under the configured review limit.
             render_error=str(exc)
             result={'verdict':'REVISAR','score':None,'scores':{},'criteria':{},
-                    'reason_full':render_error,'summary':'Falha na edição ou avaliação.',
+                    'reason_full':render_error,'summary':'Briefing precisa de revisão criativa.',
                     'corrections':[render_error],'hard_blocks':False}
             if final is None:
                 db.execute('UPDATE videos SET render_error=:err WHERE id=:id',{'err':render_error,'id':video_id})
                 db.artifact(video_id,'editor',data=result,status='REVISAR',
-                            summary='Render falhou; consultar motivo completo.',next_agent='escritor')
+                    summary='Briefing divergente; devolver ao Escritor.',next_agent='escritor')
+        except IntegrationError as exc:
+            # Infrastructure failures are not creative reviews. No video_attempts row,
+            # no retry-counter increment and no production-budget charge.
+            render_error=str(exc)
+            db.execute("UPDATE videos SET status='PIPELINE_ERROR',stage=:stage,error=:err,render_error=:err,updated=:now WHERE id=:id",
+                       {'err':render_error,'stage':'editor' if final is None else 'avaliador',
+                        'now':time.time(),'id':video_id})
+            db.log_event(video_id,'pipeline','PIPELINE_ERROR',render_error[:500])
+            return
         store_attempt(video_id,attempt,result,final,render_error)
         if decision(video_id) in ('discard','approved'):
             return
@@ -382,6 +435,7 @@ def run_pipeline(video_id):
             daily_report()
             return
         corrections=result.get('corrections') or ['Reescrever roteiro e alterar as cenas.']
+        previous_details=result
         db.log_event(video_id,'avaliador','REVIEW',f'Tentativa {attempt}/{config.max_review_attempts} reprovada; refazendo.')
     if decision(video_id) in ('discard','approved'):
         return
@@ -429,7 +483,7 @@ def distribute(video_id):
         folder.mkdir(parents=True, exist_ok=True)
         output = folder / f'video_{video_id}.mp4'
         shutil.copy2(final, output)
-        db.atomic(folder / f'metadata_{video_id}.json', json.dumps({**script, 'credits': video['credits'], 'source': video['url'],
+        db.atomic(folder / f'metadata_{video_id}.json', json.dumps({**script, 'pinned_comment':script.get('cta') or 'Qual detalhe chamou mais sua atenção? Comenta aqui!', 'credits': video['credits'], 'source': video['url'],
             'test_only': bool(video['test']), 'review': review, 'publication_id': pub['id']}, ensure_ascii=False, indent=2))
         db.execute('UPDATE publications SET output_path=:path WHERE id=:id', dict(id=pub['id'], path=str(output.relative_to(db.ROOT))))
         # This build never sends content to a social network. The creator downloads,

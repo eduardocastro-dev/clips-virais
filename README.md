@@ -239,3 +239,17 @@ na máquina do usuário antes de operar de modo automático.
 ## Skill Codex `untangle-codebase` (auditoria de arquitetura)
 
 O repositório inclui a skill MIT `caldoai/skills/untangle-codebase` para **assistentes de desenvolvimento**. Use-a sob demanda no Codex (`$untangle-codebase`); ela não é um modelo OmniRoute e não roda automaticamente com as produções. Consulte `docs/DIAGNOSTICO-V5-E-GUIA-UNTANGLE.md` para diagnóstico de assets, comandos e requisitos da futura evolução v6.
+
+### Atualização v7: vozes, poses e alinhamento
+
+Leia `docs/ENTREGA-V7-AUDIO-VOZES-POSES.md`. Depois de instalar o patch:
+
+```powershell
+python scripts/install_voices.py
+docker compose up -d --build api worker web
+docker compose exec worker python -m backend.doctor_audio
+docker compose exec api python -m backend.voice_samples
+docker compose exec api python -m backend.retry_audio_errors
+```
+
+Os pesos Piper não acompanham o ZIP. Os 72 PNGs das poses e os manifestos acompanham a atualização. A narração usa duração **real medida** e a margem de cinco segundos é editável em Configurações.

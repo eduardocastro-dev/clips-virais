@@ -108,7 +108,7 @@ export default function MediaUpload({token,maxMb,onFinished}:{token:string;maxMb
       <LocalPreview file={row.file}/>
       <div className="form-grid"><label>Categoria<select value={row.category} onChange={e=>change(row.key,{category:e.target.value})}>{categories.map(c=><option key={c}>{c}</option>)}</select></label>
         <label>Origem<select value={row.source_class} onChange={e=>change(row.key,{source_class:e.target.value})}>
-          <option value="OWNED_GENERATED">Próprio ou gerado</option><option value="OFFICIAL">Press kit / trailer oficial</option>
+          <option value="OWNED_GENERATED">Próprio ou gerado</option><option value="OFFICIAL">Press kit / trailer oficial</option><option value="FREE_LICENSE">Licença livre comprovada</option>
           <option value="THIRD_PARTY">Terceiros</option></select></label></div>
       <label>Tags (separadas por vírgula)<input value={row.tags} onChange={e=>change(row.key,{tags:e.target.value})} placeholder="corrida, vice city, carros"/></label>
       <label>Autorização/licença (mín. 10 caracteres para liberar uso)<input value={row.evidence} onChange={e=>change(row.key,{evidence:e.target.value})}

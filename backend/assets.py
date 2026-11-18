@@ -11,8 +11,8 @@ from urllib.parse import parse_qs,urlsplit
 from backend import core as db
 from backend.integrations import IntegrationError
 
-KINDS={'shorts','gameplay','images','persona','uploads','clip'}
-CLASSES={'OWNED_GENERATED','OFFICIAL','THIRD_PARTY'}
+KINDS={'shorts','gameplay','images','persona','uploads','clip','music','sfx'}
+CLASSES={'OWNED_GENERATED','OFFICIAL','THIRD_PARTY','FREE_LICENSE'}
 ROOT=db.ROOT/'assets'
 for kind in KINDS:(ROOT/kind).mkdir(parents=True,exist_ok=True)
 
@@ -100,7 +100,8 @@ def download_short(asset_id):
                 raise RuntimeError(' | '.join(lines[-3:]) or 'Vídeo não foi gerado.')
             from backend.media import probe
             duration=float(probe(candidate)['format']['duration'])
-            shutil.move(str(candidate),str(dest))
+            from backend.uploads import promote_across_volumes
+            promote_across_volumes(candidate,dest)
             relative=str(dest.relative_to(db.ROOT))
             md.update({'duration':duration,'progress':100,'download_status':'DOWNLOADED',
                 'source_url':a['url'],'channel':a['channel'],'downloaded_at':time.time()})
@@ -123,11 +124,43 @@ def download_short(asset_id):
     raise IntegrationError('Download do Short falhou após 3 tentativas: '+error)
 
 
-def select_visuals(video,script):
-    """Plan 2-4s visual changes, avoiding consecutive clip IDs and parent IDs.
+class MissingAssetsError(IntegrationError):
+    # Missing prerequisites pause a job without consuming review attempts.
+    def __init__(self, paths, detail=''):
+        self.paths=sorted(set(paths))
+        super().__init__('Faltam assets: '+', '.join(self.paths)+'. Coloque em /assets/ e clique Reescanear.'+
+                         (' Detalhes: '+detail if detail else ''))
 
-    Ranking: scene-tag relevance, different parent, lower usage count. When no
-    licensed media is suitable, a fresh animated background is mandatory.
+
+def mandatory_assets(persona=None, script=None):
+    # A registered asset is not necessarily playable or licensed.
+    from backend.personas import get_persona
+    persona=persona or get_persona()
+    missing=[]
+    gameplay=db.rows('''SELECT path,media_type,kind,category FROM assets WHERE path IS NOT NULL AND
+        status='READY' AND rights_status='AUTHORIZED' AND COALESCE(active,1)=1
+        AND (kind IN ('gameplay','shorts','clip') OR category IN ('gameplay','b-roll'))''')
+    if not any(a['path'] and (db.ROOT/a['path']).is_file() and (a['media_type']=='video' or (a['media_type'] is None and Path(a['path']).suffix.lower() in ('.mp4','.mov','.webm','.mkv'))) for a in gameplay):
+        missing.append('assets/gameplay/')
+    music=db.rows('''SELECT path FROM assets WHERE media_type='audio' AND category='musica' AND
+        status='READY' AND rights_status='AUTHORIZED' AND COALESCE(active,1)=1''')
+    if not any(a['path'] and (db.ROOT/a['path']).is_file() for a in music):missing.append('assets/music/')
+    from backend.personas import get_cast
+    cast=get_cast()
+    required_speakers={getattr(scene,'speaker','dante_palma') for scene in script.scenes} if script else {persona.get('selected','dante_palma')}
+    for speaker in required_speakers:
+        character=cast.get(speaker, persona)
+        img=character.get('image_path','')
+        if not img or not (db.ROOT/img).is_file() or not character.get('production_ready'):
+            missing.append('assets/personas/'+speaker+'/expressions/ (24 PNGs de alta qualidade)')
+    return missing
+
+
+def select_visuals(video,script):
+    """Plan 1.5-3s visual changes, avoiding consecutive clip IDs and parent IDs.
+
+    Ranking: scene-tag relevance, different parent, lower usage count. Without
+    a usable licensed video, pause the production; no neon fallback.
     """
     from backend import production_media
     folder=production_media.workspace(video['id'])
@@ -140,7 +173,7 @@ def select_visuals(video,script):
     pool=[]
     for row in candidates:
         media=row.get('media_type') or ('image' if row['kind']=='images' else 'video')
-        if media not in ('video','image') or row.get('category') in ('logo','musica','efeito sonoro'):
+        if media!='video' or row.get('category') in ('logo','musica','efeito sonoro'):
             continue
         try:safe_asset(row['path'])
         except ValueError:continue
@@ -155,7 +188,26 @@ def select_visuals(video,script):
         return set(re.findall(r'[a-zA-ZÀ-ÿ0-9]{3,}',str(value or '').lower()))
     article=production_media.capture_article(video) if video.get('platform')=='news' else None
     screenshots=(article or {}).get('assets',[])
-    result=[];last_id=None;last_parent=None;third_seconds=0.;local_usage={}
+    # Source frames are extracted only from locally available or explicitly
+    # licensed footage. A frame is not assigned a semantic score unless vision
+    # actually evaluated it against the narrated text.
+    curated={};candidates=[];source_video=None
+    if video.get('platform') in ('youtube','tiktok','instagram') and video.get('rights')=='AUTHORIZED':
+        from backend import source_frames
+        source=production_media.acquire_source_video(video)
+        if source and source.is_file():
+            source_video=source
+            candidates=source_frames.extract(video['id'],source)
+            curated=source_frames.review_with_vision(video,script,candidates)
+            if not curated and db.settings().routes.get('escritor') and db.settings().routes['escritor'].vision:
+                # Try a denser distributed sample before conceding to gameplay.
+                candidates=source_frames.extract(video['id'],source,interval=1.0,max_frames=60)
+                curated=source_frames.review_with_vision(video,script,candidates)
+    db.atomic(db.ROOT/'handoff'/video['id']/'visual-curation.json',
+       json.dumps({'candidate_count':len(candidates),'curated':curated,
+                   'method':'multimodal_vision' if curated else 'source-not-verified'},
+                  ensure_ascii=False,indent=2))
+    result=[];last_id=None;last_parent=None;third_seconds=0.;support_seconds=0.;local_usage={}
     for index,scene in enumerate(script.scenes):
         length=float(scene.end-scene.start)
         # Prefer 3-second cuts; merge any very short remainder with previous.
@@ -165,7 +217,7 @@ def select_visuals(video,script):
             if pieces and remaining<1.5:
                 pieces[-1]['duration']=round(pieces[-1]['duration']+remaining,3)
                 break
-            take=min(3.,remaining)
+            take=min(float(db.settings().visual_cut_seconds),remaining)
             pieces.append({'relative_start':round(t,3),'duration':round(take,3)})
             t+=take
         if not pieces:pieces=[{'relative_start':0.,'duration':round(length,3)}]
@@ -174,8 +226,10 @@ def select_visuals(video,script):
         for pi,part in enumerate(pieces):
             take=part['duration']
             eligible=[]
+            distinct_parents={x['parent_id'] or x['id'] for x in pool}
             for a in pool:
                 origin=a['parent_id'] or a['id']
+                if len(distinct_parents)>1 and origin==last_parent:continue
                 third=a['source_class']=='THIRD_PARTY'
                 # A source classified as third-party can never exceed 5 total seconds.
                 if third and (take>4.0 or third_seconds+take>5.0):continue
@@ -201,25 +255,59 @@ def select_visuals(video,script):
                 last_id=chosen['id'];last_parent=parent
                 local_usage[chosen['id']]=local_usage.get(chosen['id'],0)+1
             else:
-                seg={**part,'asset_id':None,'parent_id':None,'path':None,'type':'animated_gradient',
-                     'source':'generated_by_studio','source_class':'OWNED_GENERATED','credits':''}
-                last_id=None;last_parent=None
+                raise MissingAssetsError(['assets/gameplay/'], 'Nenhum vídeo/imagem licenciado e ativo corresponde à cena '+str(index+1))
             segments.append(seg)
         # Stagger article screenshot/card over some scene segments, never full article mirrors.
-        if video.get('platform')=='news' and index%2==0 and segments:
+        if video.get('platform')=='news' and segments:
             chosen=segments[0]
             if screenshots:
-                shot=max(screenshots,key=lambda shot:len(scene_tokens & words(shot.get('excerpt',''))))
-                chosen.update({'overlay_path':shot['path'],'overlay_label':shot['kind'],
-                               'overlay_source':shot['source'],'overlay_rights':'REVIEW_REQUIRED'})
-            else:
+                ranked=sorted(screenshots,key=lambda shot:
+                    (-len(scene_tokens & words(shot.get('excerpt',''))),shot['kind']!='headline'))
+                shot=ranked[index%len(ranked)] if len(ranked)>1 else ranked[0]
+                overlap=len(scene_tokens & words(shot.get('excerpt','')))
+                if overlap>=1 or (index==0 and shot['kind']=='headline'):
+                    chosen.update({'overlay_path':shot['path'],'overlay_label':shot['kind'],
+                                   'overlay_source':shot['source'],'overlay_rights':'REVIEW_REQUIRED',
+                                   'visual_relevance':None,'visual_relevance_method':'lexical',
+                                   'visual_reason':'Trecho da fonte relacionado por palavras; revisão visual recomendada.'})
+            elif index==0:
                 chosen.update({'overlay_label':'headline-card','overlay_text':video.get('title','Notícia em análise'),
                                'overlay_source':video.get('url',''),'overlay_rights':'OWNED_GENERATED'})
+        if curated.get(index):
+            options=curated[index]
+            for segment_index,segment in enumerate(segments):
+                # Keep visual material from the source in at least ~60% of
+                # this scene, but only when the visual model approved it.
+                if segment_index%4==3:continue
+                match=options[segment_index%len(options)]
+                segment.update({'overlay_path':match['path'], 'overlay_label':'source-frame',
+                    'overlay_source':video.get('url',''),
+                    'overlay_rights':'AUTHORIZED',
+                    'source_frame_at':match.get('source_timestamp'),
+                    'visual_relevance':match['relevance'],
+                    'visual_relevance_method':'vision',
+                    'visual_reason':match['reason']})
+        # One short licensed excerpt may replace the gameplay backing where
+        # a multimodal match actually exists. Hard cap: 5 seconds in total
+        # from third-party footage, with distinct nonzero source offsets.
+        if source_video and curated.get(index) and support_seconds<5 and segments:
+            candidate=curated[index][0]
+            offset=candidate.get('source_timestamp')
+            if offset is not None and float(offset)>0.01:
+                piece=next((x for x in segments if x.get('overlay_path')),segments[0])
+                excerpt=min(float(piece['duration']),4.0,5.0-support_seconds)
+                if excerpt>=1.0 and abs(excerpt-float(piece['duration']))<.01:
+                    piece.update({'source_clip_path':str(source_video.relative_to(db.ROOT)),
+                        'source_clip_at':float(offset), 'source_class':'THIRD_PARTY',
+                        'credits':video.get('credits') or video.get('url') or '',
+                        'overlay_path':None, 'overlay_label':None})
+                    support_seconds+=excerpt
         primary=segments[0]
         result.append({'scene':index,'start':scene.start,'end':scene.end,'segments':segments,
                        'type':primary['type'],'path':primary.get('path'),'asset_id':primary.get('asset_id'),
                        'source':primary['source'],'source_class':primary['source_class'],
-                       'credits':primary.get('credits',''), 'support_seconds':third_seconds})
+                       'credits':primary.get('credits',''), 'support_seconds':third_seconds,
+                       'source_coverage':round(sum(float(x['duration']) for x in segments if x.get('overlay_path'))/max(.1,length),3)})
     db.atomic(db.ROOT/'handoff'/video['id']/'visual-assets.json',json.dumps(result,indent=2,ensure_ascii=False))
     return result
 
@@ -297,28 +385,56 @@ def count_usage(visuals):
 
 
 def sync_library():
-    """Index files dropped by the user; never infer their ownership or license."""
-    extensions={'gameplay':{'.mp4','.mov','.webm'},'images':{'.png','.jpg','.jpeg','.webp'},
-                'persona':{'.png','.jpg','.jpeg','.webp'},'shorts':{'.mp4'}}
-    for kind,allowed in extensions.items():
-        for path in (ROOT/kind).iterdir():
-            if path.is_symlink() or not path.is_file() or path.suffix.lower() not in allowed:
+    # Index non-empty, user-dropped media without inferring authorization.
+    from backend.clips import mark_for_slicing
+    folders={
+       'gameplay':('gameplay','gameplay',{'.mp4','.mov','.webm','.mkv'}),
+       'images':('images','imagem de fundo',{'.png','.jpg','.jpeg','.webp','.gif'}),
+       'shorts':('shorts','gameplay',{'.mp4','.webm','.mov'}),
+       'music':('music','musica',{'.mp3','.m4a','.wav'}),
+       'sfx':('sfx','efeito sonoro',{'.mp3','.m4a','.wav'}),
+       'personas':('persona','imagem de fundo',{'.png','.jpg','.jpeg','.webp'}),
+       'persona':('persona','imagem de fundo',{'.png','.jpg','.jpeg','.webp'}),
+       'uploads':('uploads','outro',{'.mp4','.mov','.webm','.mkv','.mp3','.m4a','.wav',
+                                  '.png','.jpg','.jpeg','.webp','.gif','.ttf','.otf','.srt'}),
+    }
+    found=0;queued=0
+    for folder,(kind,category,extensions) in folders.items():
+        base=ROOT/folder;base.mkdir(parents=True,exist_ok=True)
+        for path in base.rglob('*'):
+            if not path.is_file() or path.is_symlink() or not path.stat().st_size or path.suffix.lower() not in extensions:
                 continue
+            # Use path and file hash to prevent duplicate registration after a rename.
             rel=str(path.relative_to(db.ROOT))
             if db.rows('SELECT id FROM assets WHERE path=:path',{'path':rel}):continue
-            now=time.time()
+            from backend.clips import file_sha256
+            sha=file_sha256(path)
+            if db.rows('SELECT id FROM assets WHERE sha256=:sha AND parent_id IS NULL AND path IS NOT NULL',{'sha':sha}):
+                continue
+            suffix=path.suffix.lower()
+            media_type=('video' if suffix in ('.mp4','.mov','.mkv','.webm') else
+                        'audio' if suffix in ('.mp3','.wav','.m4a') else
+                        'image' if suffix in ('.png','.jpg','.jpeg','.webp','.gif') else
+                        'font' if suffix in ('.ttf','.otf') else 'subtitle')
+            if folder=='uploads':
+                category=('gameplay' if media_type=='video' else 'musica' if media_type=='audio' else
+                          'imagem de fundo' if media_type=='image' else 'outro')
+            now=time.time();id=db.uid()
             db.execute('''INSERT OR IGNORE INTO assets
-                (id,kind,source_id,url,title,channel,source_class,rights_status,evidence,path,status,metadata,created,updated)
-                VALUES (:id,:kind,:source_id,'',:title,'','THIRD_PARTY','REVIEW_REQUIRED','',:path,'PENDING_RIGHTS','{}',:now,:now)''',
-                {'id':db.uid(),'kind':kind,'source_id':'local:'+path.name,
-                 'title':path.stem[:300],'path':rel,'now':now})
-            if kind in ('gameplay','shorts'):
+                (id,kind,source_id,url,title,channel,source_class,rights_status,evidence,path,
+                 status,metadata,created,updated,category,tags,active,sha256,media_type,size_bytes)
+                VALUES (:id,:kind,:source_id,'',:title,'','THIRD_PARTY','REVIEW_REQUIRED','',:path,
+                'PENDING_RIGHTS','{}',:now,:now,:category,'[]',1,:sha,:media,:size)''',
+                {'id':id,'kind':kind,'source_id':'local:'+sha,'title':path.stem[:300],
+                 'path':rel,'now':now,'category':category,'sha':sha,'media':media_type,'size':path.stat().st_size})
+            found+=1
+            # Clip only after documented usage authorization; ensure no duplicate jobs.
+            if media_type=='video':
                 try:
-                    from backend.clips import mark_for_slicing
-                    inserted=db.rows('SELECT id FROM assets WHERE path=:path',{'path':rel})
-                    if inserted:mark_for_slicing(inserted[0]['id'])
+                    mark_for_slicing(id);queued+=1
                 except (OSError,ValueError,RuntimeError) as exc:
                     db.log_event(None,'assets','SPLIT_ERROR',str(exc)[:500])
+    return {'registered':found,'clips_queued':queued}
 
 
 def set_license(asset_id,classification,evidence):

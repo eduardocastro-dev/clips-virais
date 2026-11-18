@@ -103,6 +103,7 @@ def test_metadata_cache_and_score(monkeypatch):
 def test_revisions_capped(monkeypatch):
     id=pipeline.create_video(test=True)
     monkeypatch.setattr(media,'render',lambda v,s,attempt=1:db.ROOT/'fake.mp4')
+    monkeypatch.setattr(media,'technical_check',lambda *args:{'valid':True,'failures':[]})
     calls=[]
     def evaluate(*args):
         calls.append(1)
@@ -241,13 +242,18 @@ def test_retention_starts_after_confirmation(client):
 
 @pytest.mark.skipif(not __import__('shutil').which('ffmpeg') or not __import__('shutil').which('ffprobe'), reason='Requires FFmpeg and ffprobe; run in Docker')
 def test_real_render_and_pipeline():
+    # v6 must NOT manufacture a completed video without licensed gameplay,
+    # soundtrack and persona. This is a protective pause, not a bad review.
     id=pipeline.create_video(test=True)
     pipeline.run_pipeline(id)
     video=db.rows('SELECT * FROM videos')[0]
-    assert video['approved']==1
-    assert media.technical_check(db.ROOT/video['final_path'],10)['valid']
-    assert len(db.rows('SELECT * FROM publications'))==3
-    assert set(p.name for p in (db.ROOT/'handoff'/id).glob('*.json')) >= {'diretor.json','cacador.json','escritor.json','editor.json','avaliador.json'}
+    assert video['approved']==0
+    assert video['status']=='PAUSED_MISSING_ASSETS'
+    assert 'assets/gameplay/' in video['error']
+    assert not db.rows('SELECT * FROM video_attempts WHERE video_id=:id',{'id':id})
+    assert not db.rows('SELECT * FROM publications')
+    assert (db.ROOT/'handoff'/id/'script.json').is_file()
+    # Corrupt media is still rejected by deterministic preflight.
     corrupt=db.ROOT/'cache/corrupt.mp4';corrupt.write_bytes(b'not-an-mp4')
     script=Script.model_validate_json((db.ROOT/'handoff'/id/'script.json').read_text('utf-8'))
     assert pipeline.evaluate(video,script,corrupt)['verdict']=='REPROVADO'

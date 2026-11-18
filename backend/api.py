@@ -59,10 +59,17 @@ def state():
         'usage': db.rows('SELECT * FROM usage ORDER BY day DESC LIMIT 30'),
         'assets': db.rows('SELECT * FROM assets ORDER BY created DESC LIMIT 1000'),
         'persona': __import__('backend.personas',fromlist=['get_persona']).get_persona(),
+        'cast': __import__('backend.personas',fromlist=['get_cast']).get_cast(),
         'recommendations':db.get_setting('recommendations',{}),
         'worker_online': time.time() - db.get_setting('worker_heartbeat', 0) < 120,
         'agents': AGENTS, 'templates': template_list(), 'daily_production_usage': db.production_usage(),
         'secrets': [x['key'].removeprefix('secret:') for x in db.rows("SELECT key FROM kv WHERE key LIKE 'secret:%'")]}
+
+
+@app.post('/api/assets/rescan', dependencies=protected)
+def rescan_assets():
+    from backend.assets import sync_library
+    return sync_library()
 
 
 @app.get('/api/settings', dependencies=protected)
@@ -145,6 +152,25 @@ def create_edited_briefing(id: str, script: Script):
     try:new_id=create_video(req,variant_key=key,manual_script=script)
     except ValueError as exc:raise HTTPException(409,str(exc)) from None
     return {'id':new_id}
+
+
+@app.post('/api/videos/{id}/resume', dependencies=protected)
+def resume_missing_assets(id: str):
+    from backend.assets import mandatory_assets, sync_library
+    from backend.personas import get_persona
+    match=db.rows('SELECT * FROM videos WHERE id=:id',{'id':id})
+    if not match:raise HTTPException(404,'Produção não encontrada.')
+    if match[0]['status'] not in ('PAUSED_MISSING_ASSETS','PAUSED_VALIDATION','PIPELINE_ERROR'):
+        raise HTTPException(409,'A produção não está pausada por falta de assets.')
+    sync_library()
+    script_path=db.ROOT/'handoff'/id/'script.json'
+    script=Script.model_validate_json(script_path.read_text('utf-8')) if script_path.is_file() else None
+    missing=mandatory_assets(get_persona(),script=script)
+    if missing:raise HTTPException(409,'Faltam assets: '+', '.join(missing))
+    db.execute("UPDATE videos SET status='QUEUED',error=NULL,updated=:now WHERE id=:id",
+               {'id':id,'now':time.time()})
+    db.enqueue('pipeline',video_id=id,unique_key='pipeline:resume:'+db.uid())
+    return {'status':'QUEUED','message':'Produção retomada preservando o histórico de tentativas.'}
 
 
 @app.post('/api/test-video', dependencies=protected)
@@ -426,6 +452,87 @@ def video_visuals(id: str, attempt: int | None = None):
     return {'scenes':json.loads(manifest.read_text('utf-8')) if manifest.is_file() else []}
 
 
+@app.get('/api/assets/{id}/preview', dependencies=protected)
+def asset_preview(id:str):
+    from backend import media
+    from backend.assets import safe_asset
+    items=db.rows('SELECT path,media_type FROM assets WHERE id=:id',{'id':id})
+    if not items or not items[0]['path']:raise HTTPException(404,'Arquivo não disponível.')
+    try:source=safe_asset(items[0]['path'])
+    except ValueError:raise HTTPException(404,'Arquivo não encontrado.') from None
+    if items[0]['media_type']!='video' and source.suffix.lower() not in ('.mp4','.webm','.mkv','.mov'):
+        raise HTTPException(422,'Prévia compacta disponível somente para vídeos.')
+    folder=db.ROOT/'cache'/'previews';folder.mkdir(parents=True,exist_ok=True)
+    output=folder/(id+'.mp4')
+    if not output.is_file() or output.stat().st_mtime_ns<source.stat().st_mtime_ns:
+        tmp=folder/(id+'.tmp.mp4')
+        try:
+            media.run([media.binary('ffmpeg'),'-y','-hide_banner','-loglevel','error',
+              '-i',str(source),'-t','3','-an','-vf','scale=270:-2','-c:v','libx264',
+              '-preset','ultrafast','-crf','30','-movflags','+faststart',str(tmp)],timeout=45)
+            tmp.replace(output)
+        except Exception as exc:
+            tmp.unlink(missing_ok=True)
+            raise HTTPException(422,'Prévia de vídeo indisponível: '+str(exc)[:230]) from None
+    return FileResponse(output,media_type='video/mp4')
+
+
+@app.get('/api/assets/{id}/thumbnail', dependencies=protected)
+def asset_thumbnail(id:str):
+    from backend import media
+    from backend.assets import safe_asset
+    from PIL import Image
+    items=db.rows('SELECT path,media_type FROM assets WHERE id=:id',{'id':id})
+    if not items or not items[0]['path']:raise HTTPException(404,'Asset não disponível.')
+    try:source=safe_asset(items[0]['path'])
+    except ValueError:raise HTTPException(404,'Arquivo não encontrado.') from None
+    folder=db.ROOT/'cache'/'thumbnails';folder.mkdir(parents=True,exist_ok=True)
+    output=folder/(id+'.jpg')
+    if not output.is_file() or output.stat().st_mtime_ns<source.stat().st_mtime_ns:
+        temporary=folder/(id+'.tmp.jpg')
+        kind=items[0]['media_type'] or ''
+        try:
+            if kind=='image' or source.suffix.lower() in ('.jpg','.jpeg','.png','.webp','.gif'):
+                with Image.open(source) as im:
+                    im.convert('RGB').resize((240,240)).save(temporary,quality=77)
+            elif kind=='audio' or source.suffix.lower() in ('.mp3','.wav','.m4a'):
+                media.run([media.binary('ffmpeg'),'-y','-i',str(source),'-filter_complex',
+                   'showwavespic=s=240x120:colors=0x38cdd1','-frames:v','1',str(temporary)],timeout=25)
+            else:
+                media.run([media.binary('ffmpeg'),'-y','-ss','1','-i',str(source),
+                  '-frames:v','1','-vf','scale=240:-2','-q:v','6',str(temporary)],timeout=40)
+            temporary.replace(output)
+        except Exception as exc:
+            temporary.unlink(missing_ok=True)
+            raise HTTPException(422,'Não foi possível gerar miniatura: '+str(exc)[:220]) from None
+    return FileResponse(output,media_type='image/jpeg')
+
+
+class AssetsBulk(BaseModel):
+    ids: list[str] = Field(min_length=1,max_length=100)
+    operation: str
+    category: str | None = None
+    confirm_delete: bool = False
+
+@app.post('/api/assets/bulk', dependencies=protected)
+def assets_bulk(item:AssetsBulk):
+    from backend.assets import update_metadata,delete
+    if item.operation not in ('activate','deactivate','recategorize','delete'):
+        raise HTTPException(422,'Operação inválida.')
+    if item.operation=='delete' and not item.confirm_delete:
+        raise HTTPException(409,'Confirmação explícita necessária para excluir assets.')
+    result={'updated':[],'errors':{}}
+    for id in dict.fromkeys(item.ids):
+        try:
+            if item.operation=='delete':delete(id,confirm_children=True)
+            elif item.operation=='activate':update_metadata(id,active=True)
+            elif item.operation=='deactivate':update_metadata(id,active=False)
+            else:update_metadata(id,category=item.category)
+            result['updated'].append(id)
+        except (ValueError,OSError) as exc:result['errors'][id]=str(exc)
+    return result
+
+
 @app.get('/api/assets', dependencies=protected)
 def list_assets():
     from backend.assets import sync_library
@@ -461,7 +568,7 @@ async def upload_asset(kind: str = Form(...),file: UploadFile = File(...)):
     """Local import. Uploaded files are untrusted until the owner records rights."""
     from backend.assets import ROOT,KINDS,sync_library
     import re
-    if kind not in KINDS:raise HTTPException(422,'Categoria inválida.')
+    if kind not in ('shorts','gameplay','images','persona'):raise HTTPException(422,'Use Upload de mídia para este tipo de arquivo.')
     extension=Path(file.filename or '').suffix.lower()
     allowed={ 'shorts':{'.mp4'},'gameplay':{'.mp4','.mov','.webm'},
               'images':{'.png','.jpeg','.jpg','.webp'},
@@ -489,7 +596,10 @@ async def upload_asset(kind: str = Form(...),file: UploadFile = File(...)):
         os.replace(partial,destination)
         sync_library()
         found=db.rows('SELECT * FROM assets WHERE path=:path',{'path':str(destination.relative_to(db.ROOT))})
-        return {'asset':found[0] if found else None,'permission_required':True}
+        if not found:
+            from backend.clips import file_sha256
+            found=db.rows('SELECT * FROM assets WHERE sha256=:sha AND parent_id IS NULL',{'sha':file_sha256(destination)})
+        return {'asset':found[0] if found else None,'permission_required':True,'duplicate':bool(found and found[0]['path']!=str(destination.relative_to(db.ROOT)))}
     finally:
         partial.unlink(missing_ok=True)
 
@@ -601,8 +711,8 @@ def save_persona(item: PersonaUpdate):
     if item.image_path:
         try:picture=safe_asset(item.image_path)
         except ValueError:raise HTTPException(422,'Imagem não cadastrada na biblioteca.') from None
-        if not picture.is_relative_to((db.ROOT/'assets/persona').resolve()):
-            raise HTTPException(422,'Coloque a imagem em assets/persona.')
+        if not (picture.is_relative_to((db.ROOT/'assets/persona').resolve()) or picture.is_relative_to((db.ROOT/'assets/personas').resolve())):
+            raise HTTPException(422,'Coloque a imagem em assets/persona ou assets/personas/<nome>.')
     if item.voice_model:
         from pathlib import Path
         path=Path(item.voice_model).resolve()
@@ -610,6 +720,207 @@ def save_persona(item: PersonaUpdate):
             raise HTTPException(422,'Voz deve ser um arquivo .onnx existente na pasta /models.')
     db.put_setting('persona',item.model_dump())
     return {'saved':True,'current':get_persona()}
+
+
+
+class CastUpdate(BaseModel):
+    look: str | None = Field(default=None, max_length=500)
+    personality: str | None = Field(default=None, max_length=600)
+    voice: str | None = Field(default=None, max_length=300)
+    voice_model: str | None = Field(default=None, max_length=300)
+    image_path: str | None = Field(default=None, max_length=300)
+    speed: float | None = Field(default=None, ge=0.7, le=1.3)
+    opening: str | None = Field(default=None, max_length=250)
+    closing: str | None = Field(default=None, max_length=250)
+
+
+@app.get('/api/personas', dependencies=protected)
+def list_cast():
+    from backend.personas import get_cast
+    return {'cast':get_cast()}
+
+
+@app.put('/api/personas/{slug}', dependencies=protected)
+def update_cast(slug: str, changes: CastUpdate):
+    from backend.personas import get_cast
+    from backend.assets import safe_asset
+    if slug not in ('dante_palma','lia_varela','caio_rivas'):
+        raise HTTPException(404,'Personagem não encontrado.')
+    data={k:v for k,v in changes.model_dump().items() if v is not None}
+    if 'image_path' in data and data['image_path']:
+        try:
+            img=safe_asset(data['image_path'])
+            if img.suffix.lower() not in ('.png','.jpg','.jpeg','.webp'):
+                raise ValueError('Formato inválido')
+        except ValueError:raise HTTPException(422,'Imagem não encontrada em /assets/') from None
+    if 'voice_model' in data and data['voice_model']:
+        model=Path(data['voice_model']).resolve()
+        if not model.is_file() or model.suffix!='.onnx' or not model.is_relative_to(Path('/models').resolve()):
+            raise HTTPException(422,'Voz Piper precisa existir em /models/*.onnx')
+    existing=db.get_setting('cast',{})
+    existing[slug]={**existing.get(slug,{}),**data}
+    db.put_setting('cast',existing)
+    return {'saved':True,'persona':get_cast()[slug]}
+
+
+@app.get('/api/personas/{slug}/avatar', dependencies=protected)
+def cast_avatar(slug: str):
+    from backend.personas import get_cast
+    from backend.assets import safe_asset
+    info=get_cast().get(slug)
+    if not info or not info.get('image_path'):
+        raise HTTPException(404,'Nenhuma imagem definida para este personagem.')
+    try:img=safe_asset(info['image_path'])
+    except ValueError:raise HTTPException(404,'Imagem da persona não encontrada.') from None
+    return FileResponse(img,media_type='image/png')
+
+
+@app.get('/api/personas/{slug}/sample', dependencies=protected)
+def cast_sample(slug: str):
+    from backend.personas import get_cast
+    from backend.media import binary
+    import subprocess
+    person=get_cast().get(slug)
+    if person is None:raise HTTPException(404,'Personagem não encontrado.')
+    model=Path(person.get('voice_model','')).resolve() if person.get('voice_model') else None
+    if not model or not model.is_file() or not model.is_relative_to(Path('/models').resolve()):
+        raise HTTPException(409,'Configure uma voz Piper existente na pasta /models para ouvir a amostra.')
+    target=db.ROOT/'cache'/('voice-sample-'+slug+'.wav')
+    phrase='GTA seis: vamos separar o que sabemos do que ainda é rumor.'
+    result=subprocess.run([binary('piper'),'--model',str(model),'--length_scale',str(round(1/float(person.get('speed') or 1),3)),'--output_file',str(target)],
+             input=phrase.encode('utf-8'),capture_output=True,timeout=120)
+    if result.returncode or not target.is_file():
+        raise HTTPException(503,'Falha no Piper: '+result.stderr.decode('utf-8',errors='replace')[-300:])
+    return FileResponse(target,media_type='audio/wav')
+
+
+# Persona poses: auth-required, with idempotent validation and no arbitrary paths.
+def _pose_folder(slug:str):
+    if slug not in ('dante_palma','lia_varela','caio_rivas'):
+        raise HTTPException(404,'Personagem inexistente.')
+    from backend.personas import get_cast
+    get_cast()
+    return db.ROOT/'assets'/'personas'/slug/'expressions'
+
+def _pose_manifest(slug:str):
+    folder=_pose_folder(slug)
+    file=folder/'manifest.json'
+    if not file.is_file():raise HTTPException(404,'Galeria não instalada.')
+    return folder,json.loads(file.read_text('utf-8'))
+
+@app.post('/api/personas/{slug}/pose-sheet',dependencies=protected)
+async def upload_pose_reference(slug:str,file:UploadFile=File(...)):
+    from backend.pose_import import save_sheet
+    try:return save_sheet(slug,await file.read())
+    except (ValueError,OSError) as exc:raise HTTPException(422,str(exc)) from None
+
+
+@app.post('/api/personas/{slug}/expressions/import',dependencies=protected)
+async def import_pose_package(slug:str,file:UploadFile=File(...)):
+    from backend.pose_import import import_poses
+    import tempfile
+    try:
+        with tempfile.TemporaryDirectory() as folder:
+            target=Path(folder)/'poses.zip'
+            size=0
+            with target.open('wb') as output:
+                while chunk:=await file.read(1024*1024):
+                    size+=len(chunk)
+                    if size>300*1024*1024:raise HTTPException(413,'Pacote de poses excede 300 MB.')
+                    output.write(chunk)
+            return import_poses(slug,target)
+    except (ValueError,OSError, __import__('zipfile').BadZipFile) as exc:
+        raise HTTPException(422,str(exc)) from None
+
+
+@app.get('/api/personas/{slug}/expressions',dependencies=protected)
+def expressions(slug:str):
+    folder,manifest=_pose_manifest(slug)
+    return {'personagem':slug,'images':[{
+        **image,'exists':(folder/image['file']).is_file(),
+        'url':f'/api/personas/{slug}/expressions/{image["index"]}/file'
+        } for image in manifest['images']]}
+
+@app.get('/api/personas/{slug}/expressions/{index}/file',dependencies=protected)
+def expression_image(slug:str,index:int):
+    folder,manifest=_pose_manifest(slug)
+    record=next((e for e in manifest['images'] if e['index']==index),None)
+    if not record:raise HTTPException(404,'Pose inexistente.')
+    file=folder/record['file']
+    if not file.is_file():raise HTTPException(404,'Arquivo PNG não encontrado.')
+    return FileResponse(file,media_type='image/png')
+
+class ExpressionUpdate(BaseModel):
+    active: bool
+
+@app.patch('/api/personas/{slug}/expressions/{index}',dependencies=protected)
+def expression_active(slug:str,index:int,item:ExpressionUpdate):
+    folder,manifest=_pose_manifest(slug)
+    record=next((e for e in manifest['images'] if e['index']==index),None)
+    if not record:raise HTTPException(404,'Pose inexistente.')
+    if index==1 and not item.active:raise HTTPException(409,'A pose neutra é obrigatória como fallback.')
+    record['active']=item.active
+    db.atomic(folder/'manifest.json',json.dumps(manifest,ensure_ascii=False,indent=2))
+    return {'updated':True}
+
+@app.post('/api/personas/{slug}/expressions/{index}/restore',dependencies=protected)
+def restore_expression(slug:str,index:int):
+    import shutil,hashlib
+    folder,manifest=_pose_manifest(slug)
+    record=next((e for e in manifest['images'] if e['index']==index),None)
+    if not record:raise HTTPException(404,'Pose inexistente.')
+    # Creator-supplied high-resolution master takes precedence; never restore SVG placeholders.
+    template=db.ROOT/'assets'/'personas'/'_quality_master'/slug/record['file']
+    if not template.is_file():
+        raise HTTPException(409,'A pose não possui um master de qualidade. Importe os 24 PNGs antes de restaurar.')
+    dest=folder/record['file'];tmp=folder/(record['file']+'.restoring')
+    shutil.copy2(template,tmp);tmp.replace(dest)
+    record['sha256']=hashlib.sha256(dest.read_bytes()).hexdigest();record['active']=True
+    db.atomic(folder/'manifest.json',json.dumps(manifest,ensure_ascii=False,indent=2))
+    return {'restored':True,'mode':'restored_from_reference_not_ai_generated'}
+
+@app.put('/api/personas/{slug}/expressions/{index}/image',dependencies=protected)
+async def replace_expression(slug:str,index:int,file:UploadFile=File(...)):
+    from PIL import Image
+    from io import BytesIO
+    import hashlib
+    folder,manifest=_pose_manifest(slug)
+    record=next((e for e in manifest['images'] if e['index']==index),None)
+    if not record:raise HTTPException(404,'Pose inexistente.')
+    content=await file.read(12*1024*1024+1)
+    if len(content)>12*1024*1024:raise HTTPException(413,'PNG excede 12 MB.')
+    try:
+        im=Image.open(BytesIO(content))
+        if im.format!='PNG' or im.mode!='RGBA' or im.size!=(1024,1536):
+            raise ValueError('Exigido PNG RGBA 1024x1536.')
+        if any(im.getpixel(c)[3]!=0 for c in [(0,0),(1023,0),(0,1535),(1023,1535)]):
+            raise ValueError('Os quatro cantos devem ser transparentes.')
+        if im.getchannel('A').getbbox() is None:raise ValueError('A imagem não contém personagem.')
+    except (OSError,ValueError) as exc:raise HTTPException(422,str(exc)) from None
+    destination=folder/record['file'];temporary=folder/(record['file']+'.uploading')
+    temporary.write_bytes(content);temporary.replace(destination)
+    record['sha256']=hashlib.sha256(content).hexdigest();record['active']=True
+    db.atomic(folder/'manifest.json',json.dumps(manifest,ensure_ascii=False,indent=2))
+    return {'saved':True}
+
+@app.get('/api/videos/{id}/audio-timeline',dependencies=protected)
+def audio_timeline(id:str,attempt:int|None=None):
+    found=db.rows('SELECT revision FROM videos WHERE id=:id',{'id':id})
+    if not found:raise HTTPException(404,'Produção não encontrada.')
+    a=attempt or found[0]['revision'] or 1
+    path=db.ROOT/'videos'/'processing'/id/f'attempt-{a:02d}'/'audio-timeline.json'
+    if not path.is_file():raise HTTPException(404,'Áudio ainda não renderizado ou medido.')
+    return json.loads(path.read_text('utf-8'))
+
+@app.get('/api/videos/{id}/pose-timeline',dependencies=protected)
+def pose_timeline(id:str,attempt:int|None=None):
+    found=db.rows('SELECT revision FROM videos WHERE id=:id',{'id':id})
+    if not found:raise HTTPException(404,'Produção não encontrada.')
+    a=attempt or found[0]['revision'] or 1
+    path=db.ROOT/'videos'/'processing'/id/f'attempt-{a:02d}'/'pose-timeline.json'
+    if not path.is_file():raise HTTPException(404,'Poses ainda não definidas.')
+    return json.loads(path.read_text('utf-8'))
+
 
 class TemplateEdit(BaseModel):
     background: str = Field(pattern=r'^0x[0-9a-fA-F]{6}$')

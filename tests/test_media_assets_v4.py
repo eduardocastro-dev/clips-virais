@@ -55,11 +55,12 @@ def test_libray_requires_license_and_copies_selected_visual():
     assets.set_license(stored['id'],'OWNED_GENERATED','Esta imagem foi desenhada por mim em 2026.')
     script=SimpleNamespace(scenes=[SimpleNamespace(start=0,end=2,source_start=0),
                                    SimpleNamespace(start=2,end=4,source_start=0)])
-    selections=assets.select_visuals({'id':id,'platform':'youtube','rights':'REFERENCE_ONLY','url':'https://www.youtube.com/watch?v=abcdefghijk'},script)
-    assert all(x['type']=='image' for x in selections)
-    assert all('/temp/' in '/'+x['path'] for x in selections)
-    assert path.exists()
-    assert (db.ROOT/'handoff'/id/'visual-assets.json').is_file()
+    # v6 requires real, licensed gameplay: a standalone illustration cannot
+    # silently become a background or hide a missing source video.
+    with pytest.raises(assets.MissingAssetsError, match='assets/gameplay/'):
+        assets.select_visuals({'id':id,'platform':'youtube','rights':'REFERENCE_ONLY',
+                               'url':'https://www.youtube.com/watch?v=abcdefghijk'},script)
+    assert path.exists()  # Library source is not touched by the failed attempt.
 
 
 def test_unauthorized_video_is_not_downloaded():

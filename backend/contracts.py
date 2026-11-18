@@ -106,8 +106,9 @@ def default_evaluation_criteria() -> dict[str, EvaluationCriterion]:
         ('duration','Duração','Duração dentro da proposta definida.'),
         ('briefing','Briefing','Aderência ao briefing do Escritor.'),
         ('originality','Originalidade','Criação própria e uso transformativo responsável.'),
-        ('accuracy','Exatidão','Distingue rumores de notícias confirmadas; não inventa fatos.'),
+        ('accuracy','Exatidão','Não inventa informações e não contradiz as fontes, sem exigir selos de verificação.'),
         ('rights','Direitos e créditos','Origem, autorizações e atribuições documentadas.'),
+        ('visual_relevance','Relevância visual','Visuais realmente relacionados à narração e identificados no manifesto.'),
     ]
     return {key: EvaluationCriterion(name=name,description=desc,min_score=6.0) for key,name,desc in labels}
 
@@ -129,7 +130,7 @@ class Settings(BaseModel):
     approval_mode: str = Field(default='manual', pattern='^(manual|automatic)$')
     platforms: list[str] = Field(default_factory=lambda: ['youtube', 'tiktok', 'instagram'])
     provider_url: str = 'http://host.docker.internal:11434/v1'
-    routes: dict[str, ModelRoute] = Field(default_factory=lambda: {a: ModelRoute() for a in ['diretor', 'cacador', 'escritor', 'editor', 'avaliador']})
+    routes: dict[str, ModelRoute] = Field(default_factory=lambda: {a: ModelRoute() for a in ['diretor', 'cacador', 'escritor', 'redator', 'editor', 'avaliador', 'pessoa']})
     daily_tokens: int = Field(default=20000, ge=1000, le=1000000)
     daily_cost_usd: float = Field(default=1, ge=0, le=100)
     cost_per_million: float = Field(default=0, ge=0, le=1000)
@@ -145,11 +146,33 @@ class Settings(BaseModel):
     clip_seconds: float = Field(default=10,ge=2,le=120)
     clip_min_tail_seconds: float = Field(default=3,ge=0.1,le=30)
     upload_max_mb: int = Field(default=1024,ge=1,le=4096)
-    music_volume: float = Field(default=0.12,ge=0,le=0.6)
+    music_volume: float = Field(default=0.16,ge=0,le=0.6)
+    visual_cut_seconds: float = Field(default=2.25,ge=1.5,le=3.0)
+    source_min_relevance: float = Field(default=7.0,ge=0,le=10)
+    source_topic_coverage: float = Field(default=0.6,ge=0,le=1)
+    energetic_mode: bool = True
+    # All narration must be aligned against actual audio, not estimated by phrase.
+    redator_ai: bool = True
+    spectator_min_score: float = Field(default=6.0, ge=0, le=10)
     auto_catalog_shorts: bool = True
     auto_download_authorized_shorts: bool = False
     max_third_party_clip_seconds: float = Field(default=4, ge=1, le=5)
     temporary_retention_days: int = Field(default=7, ge=1, le=90)
+    narration_margin_seconds: float = Field(default=5.0, ge=0, le=20)
+    narration_lead_seconds: float = Field(default=0.5, ge=0, le=3)
+
+    @model_validator(mode='after')
+    def narration_margin_valid(self):
+        if self.narration_margin_seconds + self.narration_lead_seconds >= self.duration:
+            raise ValueError('Margem da narração não pode ocupar todo o vídeo.')
+        return self
+
+    @model_validator(mode='after')
+    def complete_agent_routes(self):
+        for agent, origin in (('redator','escritor'),('pessoa','avaliador')):
+            if agent not in self.routes and origin in self.routes:
+                self.routes[agent]=self.routes[origin].model_copy(deep=True)
+        return self
 
     @model_validator(mode='after')
     def clip_settings_valid(self):
@@ -214,6 +237,8 @@ class Scene(BaseModel):
     narration: str = Field(min_length=1, max_length=600)
     source_id: str
     source_start: float = Field(default=0, ge=0, le=600)
+    speaker: str = Field(default='dante_palma', pattern=r'^[a-z][a-z0-9_]{1,39}$')
+    emotion: str = Field(default='neutro', pattern=r'^[a-z][a-z0-9_]{1,35}$')
 
 
 class Script(BaseModel):

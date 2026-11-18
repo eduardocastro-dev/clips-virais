@@ -12,7 +12,7 @@ def mix(video_id, path, work, duration):
     effects=next((a for a in sounds if a['category']=='efeito sonoro'),None)
     if not music and not effects:return path
     ff=media.binary('ffmpeg');cmd=[ff,'-hide_banner','-loglevel','error','-y','-i',str(path)]
-    graph=['[0:a]loudnorm=I=-16:TP=-1.5:LRA=11[voice]']
+    graph=['[0:a]loudnorm=I=-14:TP=-1.5:LRA=11[voice]']
     selected=[];music_index=None;fx_index=None
     if music:
         copy=production_media.copy_original(db.safe_file(music['path']),video_id,'music-'+music['id'])
@@ -28,7 +28,17 @@ def mix(video_id, path, work, duration):
         graph.append('[voice][ducked]amix=inputs=2:duration=first:dropout_transition=0[voicemusic]')
         audio='[voicemusic]'
     if fx_index is not None:
-        graph.append(f'[{fx_index}:a]volume=0.18,adelay=900:all=1[sfx]')
+        # Quiet accent on opening and transitions, rather than one isolated cue.
+        positions=[.2]+[x+.15 for x in range(5,int(duration),5)]
+        positions=positions[:18]
+        labels=''.join(f'[fx{i}]' for i in range(len(positions)))
+        graph.append(f'[{fx_index}:a]atrim=0:0.55,asetpts=PTS-STARTPTS,asplit={len(positions)}{labels}')
+        delayed=[]
+        for i,second in enumerate(positions):
+            millis=int(second*1000)
+            graph.append(f'[fx{i}]volume=0.095,adelay={millis}:all=1[accent{i}]')
+            delayed.append(f'[accent{i}]')
+        graph.append(''.join(delayed)+f'amix=inputs={len(delayed)}:duration=longest:dropout_transition=0[sfx]')
         graph.append(f'{audio}[sfx]amix=inputs=2:duration=first:dropout_transition=0[withfx]')
         audio='[withfx]'
     graph.append(f'{audio}alimiter=limit=0.95[aout]')

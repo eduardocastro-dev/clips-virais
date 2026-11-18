@@ -41,7 +41,7 @@ def read_manifest(root: Path, video_id: str, attempt: int | None) -> tuple[str |
 
 def report(root: Path, database: Path, video_id: str | None = None) -> dict:
     result={"database_exists": database.is_file(),"video_id":video_id,"status":"NOT_FOUND",
-            "agents_in_v5":['diretor','cacador','escritor','editor','avaliador'],
+            "agents_v6":['diretor','cacador','escritor','redator','editor','avaliador'],
             "scenes": [],"notes": ["Seleção no manifesto não prova que o asset foi usado no MP4; inspecione também os eventos do render."]}
     if not database.is_file():
         result['error']='Banco SQLite não encontrado. Execute no container API da instalação em uso.'
@@ -66,7 +66,7 @@ def report(root: Path, database: Path, video_id: str | None = None) -> dict:
         selected=attempts[-1]['attempt'] if attempts else None
         manifest_file,manifest=read_manifest(root,vid,selected)
         result['visual_manifest']=manifest_file
-        fallbacks=[dict(x) for x in cur.execute("SELECT status,summary,created FROM events WHERE video_id=? AND status IN ('VISUAL_FALLBACK','PERSONA_IMAGE_MISSING') ORDER BY created",(vid,))]
+        fallbacks=[dict(x) for x in cur.execute("SELECT status,summary,created FROM events WHERE video_id=? AND status IN ('VISUAL_FALLBACK','PERSONA_IMAGE_MISSING','MISSING_ASSETS','RENDER_ERROR') ORDER BY created",(vid,))]
         result['render_fallback_events']=fallbacks
         for scene in manifest:
             segments=[]
@@ -87,13 +87,15 @@ def report(root: Path, database: Path, video_id: str | None = None) -> dict:
         persona_raw=cur.execute("SELECT value FROM kv WHERE key='persona'").fetchone()
         try: persona=json.loads(persona_raw[0]) if persona_raw else {}
         except (ValueError,TypeError):persona={}
-        image=persona.get('image_path') or ''
+        name=persona.get('selected','dante_palma')
+        default=f'assets/personas/{name}/avatar.png'
+        image=persona.get('image_path') or (default if (root/default).is_file() else '')
         voice=persona.get('voice_model') or os.getenv('PIPER_MODEL','')
-        result['persona']={'selected':persona.get('selected','nico_neon'),
+        result['persona']={'selected':persona.get('selected','dante_palma'),
                            'image':safe_local(root,image),
                            'voice_model_configured':bool(voice),
                            'voice_model_file_exists':Path(voice).is_file() if voice else False,
-                           'dossier_file':'backend/personas.py',
+                           'dossier_file':'backend/personas.py / kv:cast',
                            'dossier_override_in_kv':bool(persona.get('overrides'))}
         music=cur.execute("SELECT COUNT(*) FROM assets WHERE category='musica' AND status='READY' AND rights_status='AUTHORIZED' AND COALESCE(active,1)=1 AND path IS NOT NULL").fetchone()
         result['authorized_music_rows']=music[0] if music else 0

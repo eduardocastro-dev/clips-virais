@@ -1,0 +1,199 @@
+{
+  "personagem": "dante_palma",
+  "width": 1024,
+  "height": 1536,
+  "images": [
+    {
+      "index": 1,
+      "emotion": "neutro",
+      "file": "01_neutro.png",
+      "description": "neutro",
+      "active": true,
+      "sha256": "1ca575c0ffc5529bc05c3a1229919d2fe3acae57084eaea909bfcd55652ea260"
+    },
+    {
+      "index": 2,
+      "emotion": "feliz",
+      "file": "02_feliz.png",
+      "description": "feliz",
+      "active": true,
+      "sha256": "66ed34d96393c368c02686b605abf136d470672855df66dd224856eb294dff5e"
+    },
+    {
+      "index": 3,
+      "emotion": "rindo",
+      "file": "03_rindo.png",
+      "description": "rindo",
+      "active": true,
+      "sha256": "2676fc6be47babeaf79a72cdbf023706d699e18df3c2e249c3894f9de335fe38"
+    },
+    {
+      "index": 4,
+      "emotion": "empolgado",
+      "file": "04_empolgado.png",
+      "description": "empolgado",
+      "active": true,
+      "sha256": "cbbdb1091bb43f52d13be858f4aeb6cce4529f159b74afb64e89b5bf385ab53b"
+    },
+    {
+      "index": 5,
+      "emotion": "surpreso",
+      "file": "05_surpreso.png",
+      "description": "surpreso",
+      "active": true,
+      "sha256": "9b665884bf4047173622debea6f7b3a5e4197e9ecc5e3eb89b5f9f5383f300ca"
+    },
+    {
+      "index": 6,
+      "emotion": "chocado",
+      "file": "06_chocado.png",
+      "description": "chocado",
+      "active": true,
+      "sha256": "fccd898491bddbc98e8888081a2e9fa28ece6436bfa19cb3f13d233f1ff05752"
+    },
+    {
+      "index": 7,
+      "emotion": "confuso",
+      "file": "07_confuso.png",
+      "description": "confuso",
+      "active": true,
+      "sha256": "358a8a56acfaf056ae3f07de9394f21ec9f005802e6b2a89da5c778a28513443"
+    },
+    {
+      "index": 8,
+      "emotion": "pensativo",
+      "file": "08_pensativo.png",
+      "description": "pensativo",
+      "active": true,
+      "sha256": "3f37d7d3355514e2b2b722d9b22b9b453b922a80fc42290f82f0f5e1e3728669"
+    },
+    {
+      "index": 9,
+      "emotion": "cetico",
+      "file": "09_cetico.png",
+      "description": "cetico",
+      "active": true,
+      "sha256": "551d13c444f5af227f0795e5b1a09991867f8dc74d72c4769e0cda03d23a92bb"
+    },
+    {
+      "index": 10,
+      "emotion": "irritado",
+      "file": "10_irritado.png",
+      "description": "irritado",
+      "active": true,
+      "sha256": "6172c0d89dc7be8a5757f7b6383000c93518d2f98a73e64dcfaba6c4d32d2109"
+    },
+    {
+      "index": 11,
+      "emotion": "triste",
+      "file": "11_triste.png",
+      "description": "triste",
+      "active": true,
+      "sha256": "6d21c9be562c003b30535f8f1b9f2e0f07da4bc9c138eefc465a127b12c854d8"
+    },
+    {
+      "index": 12,
+      "emotion": "entediado",
+      "file": "12_entediado.png",
+      "description": "entediado",
+      "active": true,
+      "sha256": "8fc13603d6e11ad0ee0af0894026cc0d0bb0bcb0707dbb037933015a5be3bb78"
+    },
+    {
+      "index": 13,
+      "emotion": "apontando_direita",
+      "file": "13_apontando_direita.png",
+      "description": "apontando direita",
+      "active": true,
+      "sha256": "bedad28d4ac5ad44a337c77551befbef293095b5d12afb4d653889ba542a31ad"
+    },
+    {
+      "index": 14,
+      "emotion": "apontando_esquerda",
+      "file": "14_apontando_esquerda.png",
+      "description": "apontando esquerda",
+      "active": true,
+      "sha256": "6ba1b87fcbeaefebc509edb6d245e39ce56b0d6bf4fbde2f0a1ce3750184a92e"
+    },
+    {
+      "index": 15,
+      "emotion": "apontando_cima",
+      "file": "15_apontando_cima.png",
+      "description": "apontando cima",
+      "active": true,
+      "sha256": "3d358d35228c6f3317e71da46216e6ea6414f847589a6ff423fba9e773aa4ad7"
+    },
+    {
+      "index": 16,
+      "emotion": "joinha",
+      "file": "16_joinha.png",
+      "description": "joinha",
+      "active": true,
+      "sha256": "25daaa6c86d516dad900379c8d913cb38e2f354b26a57b10138e49275cea93d1"
+    },
+    {
+      "index": 17,
+      "emotion": "bracos_cruzados",
+      "file": "17_bracos_cruzados.png",
+      "description": "bracos cruzados",
+      "active": true,
+      "sha256": "ecafee3db6a8ff2e31b9978b72b473ab69a5348ab6a7fe8e0bf58568bcf3bf03"
+    },
+    {
+      "index": 18,
+      "emotion": "dando_ombros",
+      "file": "18_dando_ombros.png",
+      "description": "dando ombros",
+      "active": true,
+      "sha256": "82452d507587818bb9cdbe5f829cb77f633eef1c4bb5f30290481e339738ce1e"
+    },
+    {
+      "index": 19,
+      "emotion": "piscando",
+      "file": "19_piscando.png",
+      "description": "piscando",
+      "active": true,
+      "sha256": "9d63a12a9a560abe8c31872bfccd2a6c029f3aad63973ba60e369bc16b00a4c4"
+    },
+    {
+      "index": 20,
+      "emotion": "sussurrando",
+      "file": "20_sussurrando.png",
+      "description": "sussurrando",
+      "active": true,
+      "sha256": "ffa414284a06125a83aba7a61fef6f9e4317011c1cc33c8fc108da569f35e714"
+    },
+    {
+      "index": 21,
+      "emotion": "comemorando",
+      "file": "21_comemorando.png",
+      "description": "comemorando",
+      "active": true,
+      "sha256": "47c9106d2a2cb1375ab76c18c0105891bbb46154ee65967ca545801683c2dc84"
+    },
+    {
+      "index": 22,
+      "emotion": "ultimo_minuto",
+      "file": "22_ultimo_minuto.png",
+      "description": "ultimo minuto",
+      "active": true,
+      "sha256": "cf89a7e6abeacd4be53c2a660f68059b0caad1818319d83190516c089b67895a"
+    },
+    {
+      "index": 23,
+      "emotion": "acenando",
+      "file": "23_acenando.png",
+      "description": "acenando",
+      "active": true,
+      "sha256": "7de5ccb65925befee226f9b12deaed84fac3fce0cafc5486013664a26f5ebc55"
+    },
+    {
+      "index": 24,
+      "emotion": "chamando_comentar",
+      "file": "24_chamando_comentar.png",
+      "description": "chamando comentar",
+      "active": true,
+      "sha256": "75198019c2a66927aac22d9e31db8b4efc76bf34b03b9ed5698b3315643e0bb3"
+    }
+  ]
+}

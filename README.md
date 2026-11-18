@@ -235,3 +235,7 @@ navegador; não é sincronizada entre dispositivos. O banco registra progresso
 em blocos e os arquivos parciais são removidos após a retenção configurada.
 O build de frontend e o end-to-end dentro do Docker precisam ser verificados
 na máquina do usuário antes de operar de modo automático.
+
+## Skill Codex `untangle-codebase` (auditoria de arquitetura)
+
+O repositório inclui a skill MIT `caldoai/skills/untangle-codebase` para **assistentes de desenvolvimento**. Use-a sob demanda no Codex (`$untangle-codebase`); ela não é um modelo OmniRoute e não roda automaticamente com as produções. Consulte `docs/DIAGNOSTICO-V5-E-GUIA-UNTANGLE.md` para diagnóstico de assets, comandos e requisitos da futura evolução v6.

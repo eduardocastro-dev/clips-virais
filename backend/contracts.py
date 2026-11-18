@@ -1,0 +1,191 @@
+from enum import StrEnum
+from urllib.parse import urlsplit, parse_qs, urlencode
+import re
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+class Rights(StrEnum):
+    AUTHORIZED = 'AUTHORIZED'
+    REFERENCE_ONLY = 'REFERENCE_ONLY'
+    REVIEW_REQUIRED = 'REVIEW_REQUIRED'
+    BLOCKED = 'BLOCKED'
+
+
+def platform_url(value: str, profile: bool = False) -> tuple[str, str]:
+    u = urlsplit(value.strip())
+    host = (u.hostname or '').lower()
+    if u.scheme != 'https' or u.username or u.password or u.port not in (None, 443):
+        raise ValueError('Use uma URL HTTPS pública da plataforma.')
+    hosts = {'youtube.com': 'youtube', 'www.youtube.com': 'youtube', 'm.youtube.com': 'youtube',
+             'youtu.be': 'youtube', 'tiktok.com': 'tiktok', 'www.tiktok.com': 'tiktok',
+             'instagram.com': 'instagram', 'www.instagram.com': 'instagram'}
+    platform = hosts.get(host)
+    if not platform:
+        raise ValueError('Plataforma não suportada. Use YouTube, TikTok ou Instagram.')
+    if profile:
+        if not re.fullmatch(r'/(@[\w.-]+|channel/[\w-]+|[\w.-]+)/?', u.path):
+            raise ValueError('URL de perfil inválida.')
+        return platform, f'https://{host}{u.path.rstrip("/")}'
+    if platform == 'youtube':
+        vid = (u.path.strip('/') if host == 'youtu.be' else
+               u.path.split('/')[-1] if u.path.startswith('/shorts/') else parse_qs(u.query).get('v', [''])[0])
+        if not re.fullmatch(r'[A-Za-z0-9_-]{11}', vid):
+            raise ValueError('ID de vídeo do YouTube inválido.')
+        return platform, 'https://www.youtube.com/watch?' + urlencode({'v': vid})
+    pattern = r'/@[\w.-]+/video/\d+/?' if platform == 'tiktok' else r'/(reel|p)/[\w-]+/?'
+    if not re.fullmatch(pattern, u.path):
+        raise ValueError('Use o link direto do vídeo, sem encurtador.')
+    return platform, f'https://www.{platform}.com{u.path.rstrip("/")}/'
+
+
+class ImportRequest(BaseModel):
+    url: str
+    rights: Rights = Rights.REFERENCE_ONLY
+    evidence: str = Field(default='', max_length=2000)
+    credits: str = Field(default='', max_length=1000)
+    instructions: str = Field(default='', max_length=3000)
+    template: str = 'gta-news'
+    duration: int = Field(default=30, ge=10, le=90)
+
+    @field_validator('url')
+    @classmethod
+    def valid_url(cls, value):
+        return platform_url(value)[1]
+
+    @model_validator(mode='after')
+    def authorization(self):
+        if self.rights == Rights.AUTHORIZED and len(self.evidence.strip()) < 10:
+            raise ValueError('Informe a evidência da autorização de reutilização.')
+        return self
+
+
+class ProfileRequest(BaseModel):
+    url: str
+    enabled: bool = True
+    interval_minutes: int = Field(default=120, ge=15, le=10080)
+    priority: int = Field(default=1, ge=1, le=10)
+
+    @field_validator('url')
+    @classmethod
+    def valid_url(cls, value):
+        return platform_url(value, profile=True)[1]
+
+
+class ModelRoute(BaseModel):
+    model: str = ''
+    fallback_model: str = ''
+    max_tokens: int = Field(default=1800, ge=256, le=8000)
+    vision: bool = False
+
+
+class Settings(BaseModel):
+    channel: str = Field(default='GTA Content Studio', min_length=1, max_length=80)
+    language: str = 'pt-BR'
+    countries: list[str] = Field(default_factory=lambda: ['US', 'GB', 'CA', 'AU'])
+    daily_limit: int = Field(default=3, ge=1, le=20)
+    duration: int = Field(default=30, ge=10, le=90)
+    search_minutes: int = Field(default=180, ge=15, le=10080)
+    retention_days: int = Field(default=7, ge=1, le=365)
+    approval_score: float = Field(default=8, ge=1, le=10)
+    automatic: bool = False
+    emergency_stop: bool = False
+    configured: bool = False
+    approval_mode: str = Field(default='manual', pattern='^(manual|automatic)$')
+    platforms: list[str] = Field(default_factory=lambda: ['youtube', 'tiktok', 'instagram'])
+    provider_url: str = 'http://host.docker.internal:11434/v1'
+    routes: dict[str, ModelRoute] = Field(default_factory=lambda: {a: ModelRoute() for a in ['diretor', 'cacador', 'escritor', 'editor', 'avaliador']})
+    daily_tokens: int = Field(default=20000, ge=1000, le=1000000)
+    daily_cost_usd: float = Field(default=1, ge=0, le=100)
+    cost_per_million: float = Field(default=0, ge=0, le=1000)
+    youtube_auto: bool = False
+    paused_integrations: list[str] = Field(default_factory=list)
+    sample_seconds: int = Field(default=5, ge=2, le=30)
+    transcription: bool = False
+    postiz_url: str = ''
+    postiz_auto: bool = False
+    postiz_channels: dict[str, str] = Field(default_factory=dict)
+    postiz_settings: dict[str, dict] = Field(default_factory=dict)
+
+    @field_validator('postiz_url')
+    @classmethod
+    def valid_postiz(cls, value):
+        if not value:
+            return value
+        u = urlsplit(value)
+        if u.scheme not in ('http', 'https') or not u.hostname or u.username or u.password or u.query:
+            raise ValueError('URL Postiz inválida.')
+        return value.rstrip('/')
+
+    @field_validator('platforms', 'paused_integrations')
+    @classmethod
+    def valid_platforms(cls, value):
+        if any(x not in ['youtube', 'tiktok', 'instagram'] for x in value):
+            raise ValueError('Plataforma inválida')
+        return list(dict.fromkeys(value))
+
+    @field_validator('provider_url')
+    @classmethod
+    def valid_provider(cls, value):
+        u = urlsplit(value)
+        if u.scheme not in ('http', 'https') or not u.hostname or u.username or u.password or u.query:
+            raise ValueError('URL de provedor inválida; use o campo de credenciais para segredos.')
+        return value.rstrip('/')
+
+    @field_validator('countries')
+    @classmethod
+    def valid_countries(cls, value):
+        if not value or any(not re.fullmatch('[A-Z]{2}', x) for x in value):
+            raise ValueError('Informe códigos de países ISO com duas letras maiúsculas.')
+        return value
+
+
+class Handoff(BaseModel):
+    id: str = Field(pattern=r'^[a-f0-9]{32}$')
+    run_id: str = Field(pattern=r'^[a-f0-9]{32}$')
+    status: str = Field(pattern='^(CONCLUIDO|FALHA|REVISAR|REPROVADO)$')
+    proximo_agente: str
+    resumo: str = Field(max_length=600)
+    arquivos: list[str]
+    dados: dict = Field(default_factory=dict)
+
+    @field_validator('resumo')
+    @classmethod
+    def compact(cls, v):
+        if len(v.splitlines()) > 3:
+            raise ValueError('Resumo excede três linhas')
+        return v
+
+
+class Scene(BaseModel):
+    start: float = Field(ge=0)
+    end: float = Field(gt=0)
+    text: str = Field(min_length=1, max_length=120)
+    narration: str = Field(min_length=1, max_length=600)
+    source_id: str
+    source_start: float = Field(default=0, ge=0, le=600)
+
+
+class Script(BaseModel):
+    title: str = Field(min_length=1, max_length=100)
+    hook: str = Field(min_length=1, max_length=120)
+    description: str = Field(max_length=4500)
+    hashtags: list[str]
+    rumor: bool = False
+    template: str
+    duration: int = Field(ge=10, le=90)
+    scenes: list[Scene] = Field(min_length=2, max_length=12)
+    cta: str = Field(default='', max_length=120)
+    music: str = 'none'
+
+    @model_validator(mode='after')
+    def contiguous(self):
+        pos = 0
+        for s in self.scenes:
+            if abs(s.start - pos) > .05 or s.end <= s.start:
+                raise ValueError('As cenas devem ter timestamps contínuos.')
+            pos = s.end
+        if abs(pos - self.duration) > .05:
+            raise ValueError('Cenas não correspondem à duração.')
+        if self.music != 'none':
+            raise ValueError('Música requer catálogo licenciado; use none.')
+        return self

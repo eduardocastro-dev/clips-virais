@@ -1,0 +1,183 @@
+[
+  {
+    "package": "fastapi",
+    "metadata_version": "0.163.2",
+    "license_expression": "MIT",
+    "license": null,
+    "classifiers": [],
+    "project_urls": {
+      "Changelog": "https://fastapi.tiangolo.com/release-notes/",
+      "Documentation": "https://fastapi.tiangolo.com/",
+      "Homepage": "https://github.com/fastapi/fastapi",
+      "Issues": "https://github.com/fastapi/fastapi/issues",
+      "Repository": "https://github.com/fastapi/fastapi"
+    },
+    "source": "https://pypi.org/pypi/fastapi/json"
+  },
+  {
+    "package": "uvicorn",
+    "metadata_version": "0.54.0",
+    "license_expression": "BSD-3-Clause",
+    "license": null,
+    "classifiers": [],
+    "project_urls": {
+      "Changelog": "https://uvicorn.dev/release-notes",
+      "Funding": "https://github.com/sponsors/Kludex",
+      "Homepage": "https://uvicorn.dev/",
+      "Source": "https://github.com/Kludex/uvicorn"
+    },
+    "source": "https://pypi.org/pypi/uvicorn/json"
+  },
+  {
+    "package": "SQLAlchemy",
+    "metadata_version": "2.1.9",
+    "license_expression": "MIT",
+    "license": null,
+    "classifiers": [],
+    "project_urls": {
+      "Changelog": "https://docs.sqlalchemy.org/latest/changelog/index.html",
+      "Discussions": "https://github.com/sqlalchemy/sqlalchemy/discussions",
+      "Documentation": "https://docs.sqlalchemy.org",
+      "Homepage": "https://www.sqlalchemy.org",
+      "Issue Tracker": "https://github.com/sqlalchemy/sqlalchemy/issues",
+      "Source Code": "https://github.com/sqlalchemy/sqlalchemy"
+    },
+    "source": "https://pypi.org/pypi/SQLAlchemy/json"
+  },
+  {
+    "package": "pydantic-settings",
+    "metadata_version": "2.16.3",
+    "license_expression": "MIT",
+    "license": null,
+    "classifiers": [
+      "License :: OSI Approved :: MIT License"
+    ],
+    "project_urls": {
+      "Changelog": "https://github.com/pydantic/pydantic-settings/releases",
+      "Documentation": "https://docs.pydantic.dev/dev-v2/concepts/pydantic_settings/",
+      "Funding": "https://github.com/sponsors/samuelcolvin",
+      "Homepage": "https://github.com/pydantic/pydantic-settings",
+      "Source": "https://github.com/pydantic/pydantic-settings"
+    },
+    "source": "https://pypi.org/pypi/pydantic-settings/json"
+  },
+  {
+    "package": "httpx",
+    "metadata_version": "0.28.1",
+    "license_expression": null,
+    "license": "BSD-3-Clause",
+    "classifiers": [
+      "License :: OSI Approved :: BSD License"
+    ],
+    "project_urls": {
+      "Changelog": "https://github.com/encode/httpx/blob/master/CHANGELOG.md",
+      "Documentation": "https://www.python-httpx.org",
+      "Homepage": "https://github.com/encode/httpx",
+      "Source": "https://github.com/encode/httpx"
+    },
+    "source": "https://pypi.org/pypi/httpx/json"
+  },
+  {
+    "package": "cryptography",
+    "metadata_version": "50.0.2",
+    "license_expression": "Apache-2.0 OR BSD-3-Clause",
+    "license": null,
+    "classifiers": [],
+    "project_urls": {
+      "changelog": "https://cryptography.io/en/latest/changelog/",
+      "documentation": "https://cryptography.io/",
+      "homepage": "https://github.com/pyca/cryptography",
+      "issues": "https://github.com/pyca/cryptography/issues",
+      "source": "https://github.com/pyca/cryptography/"
+    },
+    "source": "https://pypi.org/pypi/cryptography/json"
+  },
+  {
+    "package": "feedparser",
+    "metadata_version": "6.0.14",
+    "license_expression": null,
+    "license": "BSD-2-Clause",
+    "classifiers": [],
+    "project_urls": {
+      "Download": "https://pypi.python.org/pypi/feedparser",
+      "Homepage": "https://github.com/kurtmckee/feedparser"
+    },
+    "source": "https://pypi.org/pypi/feedparser/json"
+  },
+  {
+    "package": "yt-dlp",
+    "metadata_version": "2026.10.26",
+    "license_expression": "Unlicense",
+    "license": null,
+    "classifiers": [],
+    "project_urls": {
+      "Documentation": "https://github.com/yt-dlp/yt-dlp#readme",
+      "Funding": "https://github.com/yt-dlp/yt-dlp/blob/master/Maintainers.md#maintainers",
+      "Repository": "https://github.com/yt-dlp/yt-dlp",
+      "Tracker": "https://github.com/yt-dlp/yt-dlp/issues"
+    },
+    "source": "https://pypi.org/pypi/yt-dlp/json"
+  },
+  {
+    "package": "piper-tts",
+    "metadata_version": "1.8.0",
+    "license_expression": null,
+    "license": "GPL-3.0-or-later",
+    "classifiers": [],
+    "project_urls": {
+      "Homepage": "http://github.com/OHF-voice/piper1-gpl"
+    },
+    "source": "https://pypi.org/pypi/piper-tts/json"
+  },
+  {
+    "package": "faster-whisper",
+    "metadata_version": "1.2.1",
+    "license_expression": null,
+    "license": "MIT",
+    "classifiers": [
+      "License :: OSI Approved :: MIT License"
+    ],
+    "project_urls": {
+      "Homepage": "https://github.com/SYSTRAN/faster-whisper"
+    },
+    "source": "https://pypi.org/pypi/faster-whisper/json"
+  },
+  {
+    "package": "tzdata",
+    "metadata_version": "2026.6",
+    "license_expression": null,
+    "license": "Apache-2.0",
+    "classifiers": [],
+    "project_urls": {
+      "Bug Reports": "https://github.com/python/tzdata/issues",
+      "Documentation": "https://tzdata.python.org",
+      "Homepage": "https://github.com/python/tzdata",
+      "Source": "https://github.com/python/tzdata"
+    },
+    "source": "https://pypi.org/pypi/tzdata/json"
+  },
+  {
+    "package": "next",
+    "metadata_version": "16.4.6",
+    "license": "MIT",
+    "source": "https://registry.npmjs.org/next/latest"
+  },
+  {
+    "package": "react",
+    "metadata_version": "19.3.1",
+    "license": "MIT",
+    "source": "https://registry.npmjs.org/react/latest"
+  },
+  {
+    "package": "tailwindcss",
+    "metadata_version": "4.3.5",
+    "license": "MIT",
+    "source": "https://registry.npmjs.org/tailwindcss/latest"
+  },
+  {
+    "package": "lucide-react",
+    "metadata_version": "1.74.0",
+    "license": "ISC",
+    "source": "https://registry.npmjs.org/lucide-react/latest"
+  }
+]

@@ -1,0 +1,15 @@
+.git
+.venv
+.env
+data
+videos
+output
+handoff
+reports
+cache
+logs
+models
+frontend/node_modules
+frontend/.next
+test-results
+**/__pycache__

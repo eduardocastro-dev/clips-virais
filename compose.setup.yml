@@ -1,0 +1,7 @@
+services:
+  setup:
+    image: python:3.13-slim
+    working_dir: /workspace
+    command: [python, scripts/setup_stack.py]
+    volumes:
+      - .:/workspace

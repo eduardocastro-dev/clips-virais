@@ -1,0 +1,20 @@
+{
+  "contract": "../IMPLEMENTATION.md — painel operacional, dados reais, ação importar, estados explícitos e layouts desktop/mobile.",
+  "targetViewports": ["1440x900", "390x844"],
+  "accessibility": {"status":"pass", "evidence":"Labels e navegação semântica observados na árvore acessível. Tab da URL ao select moveu foco visível com outline sólido rgb(82,223,219). Paleta principal com contraste calculado; prefers-reduced-motion desativa animações no CSS. Não é uma auditoria completa de leitor de tela."},
+  "responsive": {"status":"pass", "evidence":"1440x900: client/scrollWidth 1425; 390x844: client/scrollWidth 375. Sem overflow da página. Cards empilhados, menus e trilho de agentes com rolagem local; formulário e fila manual legíveis."},
+  "contentStates": {
+    "loading":{"status":"pass","evidence":"API pausada temporariamente: Processando solicitação visível, atualizar desabilitado, estrutura preservada. API retomada e Dados atualizados observado."},
+    "empty":{"status":"pass","evidence":"Dashboard inicial sem vídeos ofereceu Gerar vídeo de teste. Radar e Analytics mostraram ausência de fontes/métricas."},
+    "error":{"status":"pass","evidence":"Importar https://example.com/video exibiu Plataforma não suportada com o campo preservado, após correção do JSON bruto."},
+    "partial":{"status":"pass","evidence":"Vídeo aprovado disponível e três publicações manuais; métricas sem dados exibidas como travessão e indisponíveis."},
+    "success":{"status":"pass","evidence":"Teste iniciado pelo botão concluiu render, aprovação e três destinos; prévia e link Baixar vídeo visíveis."},
+    "permission":{"status":"pass","evidence":"Token inválido não abriu o painel e apresentou mensagem de autenticação; token local válido abriu a aplicação."}
+  },
+  "renderedEvidence": [
+    {"viewport":"1440x900","artifact":"dashboard-final.jpg","observation":"Dashboard real após teste completo, uma produção, três pendências manuais e nenhuma publicação externa."},
+    {"viewport":"390x844","artifact":"mobile-dashboard.jpg","observation":"Dashboard móvel com cards empilhados, controles acessíveis e produção sintética marcada TESTE."},
+    {"viewport":"390x844","artifact":"mobile-form.jpg","observation":"Formulário vertical com controles rotulados e foco por teclado no template."},
+    {"viewport":"390x844","artifact":"loading-mobile.jpg","observation":"Indicador de carregamento com atualização desabilitada enquanto a API esteve pausada."}
+  ]
+}

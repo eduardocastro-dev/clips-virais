@@ -1,0 +1,8 @@
+{
+  "gta-news": {"name":"GTA News", "background":"0x101827", "accent":"0x22d3ee", "font_size":54, "transition":"fade", "framing":"center-crop", "identity":"news"},
+  "gta-theory": {"name":"GTA Theory", "background":"0x20162e", "accent":"0xc4b5fd", "font_size":52, "transition":"fade", "framing":"center-crop", "identity":"theory"},
+  "gta-comparison": {"name":"GTA Comparison", "background":"0x152021", "accent":"0x5eead4", "font_size":50, "transition":"fade", "framing":"center-crop", "identity":"comparison"},
+  "gta-cinematic": {"name":"GTA Cinematic", "background":"0x141414", "accent":"0xfbbf24", "font_size":46, "transition":"fade", "framing":"center-crop", "identity":"cinematic"},
+  "gta-facts": {"name":"GTA Facts", "background":"0x102018", "accent":"0x86efac", "font_size":56, "transition":"fade", "framing":"center-crop", "identity":"facts"},
+  "gta-reaction": {"name":"GTA Reaction", "background":"0x25151d", "accent":"0xfda4af", "font_size":54, "transition":"fade", "framing":"center-crop", "identity":"reaction"}
+}

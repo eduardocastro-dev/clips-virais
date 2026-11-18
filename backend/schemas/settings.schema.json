@@ -1,0 +1,200 @@
+{
+  "$defs": {
+    "ModelRoute": {
+      "properties": {
+        "model": {
+          "default": "",
+          "title": "Model",
+          "type": "string"
+        },
+        "fallback_model": {
+          "default": "",
+          "title": "Fallback Model",
+          "type": "string"
+        },
+        "max_tokens": {
+          "default": 1800,
+          "maximum": 8000,
+          "minimum": 256,
+          "title": "Max Tokens",
+          "type": "integer"
+        },
+        "vision": {
+          "default": false,
+          "title": "Vision",
+          "type": "boolean"
+        }
+      },
+      "title": "ModelRoute",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "channel": {
+      "default": "GTA Content Studio",
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Channel",
+      "type": "string"
+    },
+    "language": {
+      "default": "pt-BR",
+      "title": "Language",
+      "type": "string"
+    },
+    "countries": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Countries",
+      "type": "array"
+    },
+    "daily_limit": {
+      "default": 3,
+      "maximum": 20,
+      "minimum": 1,
+      "title": "Daily Limit",
+      "type": "integer"
+    },
+    "duration": {
+      "default": 30,
+      "maximum": 90,
+      "minimum": 10,
+      "title": "Duration",
+      "type": "integer"
+    },
+    "search_minutes": {
+      "default": 180,
+      "maximum": 10080,
+      "minimum": 15,
+      "title": "Search Minutes",
+      "type": "integer"
+    },
+    "retention_days": {
+      "default": 7,
+      "maximum": 365,
+      "minimum": 1,
+      "title": "Retention Days",
+      "type": "integer"
+    },
+    "approval_score": {
+      "default": 8,
+      "maximum": 10,
+      "minimum": 1,
+      "title": "Approval Score",
+      "type": "number"
+    },
+    "automatic": {
+      "default": false,
+      "title": "Automatic",
+      "type": "boolean"
+    },
+    "emergency_stop": {
+      "default": false,
+      "title": "Emergency Stop",
+      "type": "boolean"
+    },
+    "configured": {
+      "default": false,
+      "title": "Configured",
+      "type": "boolean"
+    },
+    "approval_mode": {
+      "default": "manual",
+      "pattern": "^(manual|automatic)$",
+      "title": "Approval Mode",
+      "type": "string"
+    },
+    "platforms": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Platforms",
+      "type": "array"
+    },
+    "provider_url": {
+      "default": "http://host.docker.internal:11434/v1",
+      "title": "Provider Url",
+      "type": "string"
+    },
+    "routes": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ModelRoute"
+      },
+      "title": "Routes",
+      "type": "object"
+    },
+    "daily_tokens": {
+      "default": 20000,
+      "maximum": 1000000,
+      "minimum": 1000,
+      "title": "Daily Tokens",
+      "type": "integer"
+    },
+    "daily_cost_usd": {
+      "default": 1,
+      "maximum": 100,
+      "minimum": 0,
+      "title": "Daily Cost Usd",
+      "type": "number"
+    },
+    "cost_per_million": {
+      "default": 0,
+      "maximum": 1000,
+      "minimum": 0,
+      "title": "Cost Per Million",
+      "type": "number"
+    },
+    "youtube_auto": {
+      "default": false,
+      "title": "Youtube Auto",
+      "type": "boolean"
+    },
+    "paused_integrations": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Paused Integrations",
+      "type": "array"
+    },
+    "sample_seconds": {
+      "default": 5,
+      "maximum": 30,
+      "minimum": 2,
+      "title": "Sample Seconds",
+      "type": "integer"
+    },
+    "transcription": {
+      "default": false,
+      "title": "Transcription",
+      "type": "boolean"
+    },
+    "postiz_url": {
+      "default": "",
+      "title": "Postiz Url",
+      "type": "string"
+    },
+    "postiz_auto": {
+      "default": false,
+      "title": "Postiz Auto",
+      "type": "boolean"
+    },
+    "postiz_channels": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Postiz Channels",
+      "type": "object"
+    },
+    "postiz_settings": {
+      "additionalProperties": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Postiz Settings",
+      "type": "object"
+    }
+  },
+  "title": "Settings",
+  "type": "object"
+}

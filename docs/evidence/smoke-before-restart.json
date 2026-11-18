@@ -1,0 +1,17 @@
+{
+  "video_id": "9004907cfbf0409eaa1826e0198e0074",
+  "status": "APPROVED",
+  "bytes": 333250,
+  "handoffs": [
+    "script.json",
+    "diretor.json",
+    "avaliador.json",
+    "review-0.json",
+    "editor.json",
+    "cacador.json",
+    "escritor.json"
+  ],
+  "manual_publications": 3,
+  "external_publications": 0,
+  "worker_online": true
+}

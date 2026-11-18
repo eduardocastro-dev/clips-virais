@@ -1,0 +1,258 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: runtime
+    environment: &env
+      STUDIO_TOKEN: ${STUDIO_TOKEN:?Execute start.ps1 ou sh start.sh para gerar a configuracao}
+      STUDIO_DATA: /studio/data
+      STUDIO_FILES: /studio
+      STUDIO_TIMEZONE: ${STUDIO_TIMEZONE:-America/Sao_Paulo}
+      PIPER_MODEL: ${PIPER_MODEL:-/models/pt_BR-faber-medium.onnx}
+      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434/v1}
+    volumes: &volumes
+      - studio:/studio
+      - ./models:/models:ro
+    ports:
+      - 127.0.0.1:8000:8000
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, curl, -fsS, http://localhost:8000/health]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: runtime
+    command: [python, -m, backend.worker]
+    environment: *env
+    volumes: *volumes
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, python, -m, backend.worker, --health]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  web:
+    build: ./frontend
+    environment:
+      API_URL: http://api:8000
+    ports:
+      - 127.0.0.1:3000:3000
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+  tests:
+    profiles: [test]
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: test
+    environment:
+      STUDIO_TIMEZONE: America/Sao_Paulo
+  bootstrap:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      target: runtime
+    command: [python, -m, backend.bootstrap]
+    environment:
+      <<: *env
+      POSTIZ_ADMIN_EMAIL: ${POSTIZ_ADMIN_EMAIL:?Execute start.ps1}
+      POSTIZ_ADMIN_PASSWORD: ${POSTIZ_ADMIN_PASSWORD:?Execute start.ps1}
+      OMNIROUTE_PASSWORD: ${OMNIROUTE_PASSWORD:?Execute start.ps1}
+      OMNIROUTE_FREE_MODELS: ${OMNIROUTE_FREE_MODELS:-}
+    volumes: *volumes
+    depends_on:
+      api:
+        condition: service_healthy
+      postiz:
+        condition: service_healthy
+      omniroute:
+        condition: service_healthy
+    restart: on-failure:3
+  omniroute:
+    image: ${OMNIROUTE_IMAGE:-diegosouzapw/omniroute@sha256:2c4c755a54f8ce5341bc1856580b71f47a0f16a9afab4a55f84d540810631f68}
+    restart: unless-stopped
+    environment:
+      DATA_DIR: /app/data
+      PORT: '20128'
+      HOSTNAME: 0.0.0.0
+      API_HOST: 0.0.0.0
+      JWT_SECRET: ${OMNIROUTE_JWT_SECRET:?Execute start.ps1}
+      API_KEY_SECRET: ${OMNIROUTE_API_KEY_SECRET:?Execute start.ps1}
+      INITIAL_PASSWORD: ${OMNIROUTE_PASSWORD:?Execute start.ps1}
+      REQUIRE_API_KEY: 'true'
+      AUTH_COOKIE_SECURE: 'false'
+      REDIS_URL: redis://omniroute-redis:6379
+      NODE_OPTIONS: --max-old-space-size=2048
+    ports:
+      - 127.0.0.1:20128:20128
+    volumes:
+      - omniroute-data:/app/data
+    depends_on:
+      omniroute-redis:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, node, healthcheck.mjs]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+  omniroute-redis:
+    image: redis:7.2-alpine
+    restart: unless-stopped
+    volumes:
+      - omniroute-redis-data:/data
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  postiz:
+    image: ${POSTIZ_IMAGE:-ghcr.io/gitroomhq/postiz-app@sha256:875e61ac5d0ac43c3dec78a78a7032dfb03d9a8c6d4936ebb18adb606cc207c5}
+    restart: unless-stopped
+    environment:
+      MAIN_URL: ${POSTIZ_PUBLIC_URL:-http://localhost:4007}
+      FRONTEND_URL: ${POSTIZ_PUBLIC_URL:-http://localhost:4007}
+      NEXT_PUBLIC_BACKEND_URL: ${POSTIZ_PUBLIC_URL:-http://localhost:4007}/api
+      JWT_SECRET: ${POSTIZ_JWT_SECRET:?Execute start.ps1}
+      DATABASE_URL: postgresql://postiz:${POSTIZ_DB_PASSWORD:?Execute start.ps1}@postiz-postgres:5432/postiz
+      REDIS_URL: redis://postiz-redis:6379
+      BACKEND_INTERNAL_URL: http://localhost:3000
+      TEMPORAL_ADDRESS: temporal:7233
+      IS_GENERAL: 'true'
+      DISABLE_REGISTRATION: 'true'
+      NOT_SECURED: 'true'
+      RUN_CRON: 'true'
+      STORAGE_PROVIDER: local
+      UPLOAD_DIRECTORY: /uploads
+      NEXT_PUBLIC_UPLOAD_DIRECTORY: /uploads
+      API_LIMIT: '30'
+      NX_ADD_PLUGINS: 'false'
+      YOUTUBE_CLIENT_ID: ${YOUTUBE_CLIENT_ID:-}
+      YOUTUBE_CLIENT_SECRET: ${YOUTUBE_CLIENT_SECRET:-}
+      TIKTOK_CLIENT_ID: ${TIKTOK_CLIENT_ID:-}
+      TIKTOK_CLIENT_SECRET: ${TIKTOK_CLIENT_SECRET:-}
+      FACEBOOK_APP_ID: ${FACEBOOK_APP_ID:-}
+      FACEBOOK_APP_SECRET: ${FACEBOOK_APP_SECRET:-}
+      INSTAGRAM_APP_ID: ${INSTAGRAM_APP_ID:-}
+      INSTAGRAM_APP_SECRET: ${INSTAGRAM_APP_SECRET:-}
+    ports:
+      - 127.0.0.1:4007:5000
+    volumes:
+      - postiz-config:/config
+      - postiz-uploads:/uploads
+    depends_on:
+      postiz-postgres:
+        condition: service_healthy
+      postiz-redis:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, node, -e, "require('http').get('http://localhost:5000/',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"]
+      interval: 20s
+      timeout: 10s
+      retries: 15
+      start_period: 120s
+  postiz-postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postiz
+      POSTGRES_DB: postiz
+      POSTGRES_PASSWORD: ${POSTIZ_DB_PASSWORD:?Execute start.ps1}
+    volumes:
+      - postiz-db:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD, pg_isready, -U, postiz, -d, postiz]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+  postiz-redis:
+    image: redis:7.2-alpine
+    restart: unless-stopped
+    volumes:
+      - postiz-redis:/data
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  temporal-postgresql:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: ${TEMPORAL_DB_PASSWORD:?Execute start.ps1}
+    volumes:
+      - temporal-db:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD, pg_isready, -U, temporal]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+  temporal-elasticsearch:
+    image: elasticsearch:7.17.27
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      ES_JAVA_OPTS: -Xms256m -Xmx256m
+      xpack.security.enabled: 'false'
+      cluster.routing.allocation.disk.watermark.low: 512mb
+      cluster.routing.allocation.disk.watermark.high: 256mb
+      cluster.routing.allocation.disk.watermark.flood_stage: 128mb
+    volumes:
+      - temporal-search:/usr/share/elasticsearch/data
+    healthcheck:
+      test: [CMD, curl, -fsS, 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s']
+      interval: 10s
+      timeout: 10s
+      retries: 15
+      start_period: 60s
+  temporal:
+    image: temporalio/auto-setup:1.28.1
+    restart: unless-stopped
+    environment:
+      DB: postgres12
+      DB_PORT: '5432'
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: ${TEMPORAL_DB_PASSWORD:?Execute start.ps1}
+      POSTGRES_SEEDS: temporal-postgresql
+      ENABLE_ES: 'true'
+      ES_SEEDS: temporal-elasticsearch
+      ES_VERSION: v7
+      TEMPORAL_NAMESPACE: default
+    depends_on:
+      temporal-postgresql:
+        condition: service_healthy
+      temporal-elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, temporal, operator, cluster, health, --address, 'temporal:7233']
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+volumes:
+  studio:
+  omniroute-data:
+  omniroute-redis-data:
+  postiz-config:
+  postiz-uploads:
+  postiz-db:
+  postiz-redis:
+  temporal-db:
+  temporal-search:

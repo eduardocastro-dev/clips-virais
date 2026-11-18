@@ -1,0 +1,2 @@
+# Optional speech alignment. Models download on first use and remain in the cache volume.
+faster-whisper==1.2.1

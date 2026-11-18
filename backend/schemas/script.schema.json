@@ -1,0 +1,122 @@
+{
+  "$defs": {
+    "Scene": {
+      "properties": {
+        "start": {
+          "minimum": 0,
+          "title": "Start",
+          "type": "number"
+        },
+        "end": {
+          "exclusiveMinimum": 0,
+          "title": "End",
+          "type": "number"
+        },
+        "text": {
+          "maxLength": 120,
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "narration": {
+          "maxLength": 600,
+          "minLength": 1,
+          "title": "Narration",
+          "type": "string"
+        },
+        "source_id": {
+          "title": "Source Id",
+          "type": "string"
+        },
+        "source_start": {
+          "default": 0,
+          "maximum": 600,
+          "minimum": 0,
+          "title": "Source Start",
+          "type": "number"
+        }
+      },
+      "required": [
+        "start",
+        "end",
+        "text",
+        "narration",
+        "source_id"
+      ],
+      "title": "Scene",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "title": {
+      "maxLength": 100,
+      "minLength": 1,
+      "title": "Title",
+      "type": "string"
+    },
+    "hook": {
+      "maxLength": 120,
+      "minLength": 1,
+      "title": "Hook",
+      "type": "string"
+    },
+    "description": {
+      "maxLength": 4500,
+      "title": "Description",
+      "type": "string"
+    },
+    "hashtags": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Hashtags",
+      "type": "array"
+    },
+    "rumor": {
+      "default": false,
+      "title": "Rumor",
+      "type": "boolean"
+    },
+    "template": {
+      "title": "Template",
+      "type": "string"
+    },
+    "duration": {
+      "maximum": 90,
+      "minimum": 10,
+      "title": "Duration",
+      "type": "integer"
+    },
+    "scenes": {
+      "items": {
+        "$ref": "#/$defs/Scene"
+      },
+      "maxItems": 12,
+      "minItems": 2,
+      "title": "Scenes",
+      "type": "array"
+    },
+    "cta": {
+      "default": "",
+      "maxLength": 120,
+      "title": "Cta",
+      "type": "string"
+    },
+    "music": {
+      "default": "none",
+      "title": "Music",
+      "type": "string"
+    }
+  },
+  "required": [
+    "title",
+    "hook",
+    "description",
+    "hashtags",
+    "template",
+    "duration",
+    "scenes"
+  ],
+  "title": "Script",
+  "type": "object"
+}

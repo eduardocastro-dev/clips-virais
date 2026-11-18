@@ -1,0 +1,50 @@
+{
+  "properties": {
+    "id": {
+      "pattern": "^[a-f0-9]{32}$",
+      "title": "Id",
+      "type": "string"
+    },
+    "run_id": {
+      "pattern": "^[a-f0-9]{32}$",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "status": {
+      "pattern": "^(CONCLUIDO|FALHA|REVISAR|REPROVADO)$",
+      "title": "Status",
+      "type": "string"
+    },
+    "proximo_agente": {
+      "title": "Proximo Agente",
+      "type": "string"
+    },
+    "resumo": {
+      "maxLength": 600,
+      "title": "Resumo",
+      "type": "string"
+    },
+    "arquivos": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Arquivos",
+      "type": "array"
+    },
+    "dados": {
+      "additionalProperties": true,
+      "title": "Dados",
+      "type": "object"
+    }
+  },
+  "required": [
+    "id",
+    "run_id",
+    "status",
+    "proximo_agente",
+    "resumo",
+    "arquivos"
+  ],
+  "title": "Handoff",
+  "type": "object"
+}

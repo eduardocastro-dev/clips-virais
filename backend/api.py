@@ -437,6 +437,72 @@ def video_file(video_id: str, attempt: int | None = None):
     return FileResponse(file, media_type='video/mp4', filename=video_id + (f'-attempt-{attempt}' if attempt else '') + '.mp4')
 
 
+def _publication_seo_record(id: str):
+    """Use publication IDs and server-owned paths; never trust file paths from clients."""
+    rows = db.rows("SELECT p.*,v.title,v.url AS video_url,v.credits,v.test,v.approved "
+                   "FROM publications p JOIN videos v ON v.id=p.video_id WHERE p.id=:id", {'id':id})
+    if not rows:
+        raise HTTPException(404, 'Publicação não encontrada.')
+    row = rows[0]
+    if not row['approved'] or not row['output_path']:
+        raise HTTPException(409, 'Metadados disponíveis apenas para vídeos aprovados e distribuídos.')
+    path = Path(row['output_path']).parent / f"metadata_{row['video_id']}.json"
+    try:
+        file = db.safe_file(str(path))
+    except ValueError:
+        raise HTTPException(404, 'Arquivo de metadados da publicação não encontrado.') from None
+    return row, file
+
+
+@app.get('/api/publications/{id}/seo', dependencies=protected)
+def publication_seo(id: str):
+    from backend.seo import build_seo_package
+    row, path = _publication_seo_record(id)
+    data = json.loads(path.read_text('utf-8'))
+    seo = data.get('seo')
+    if not seo:
+        script_file = db.ROOT / 'handoff' / row['video_id'] / 'script.json'
+        if not script_file.is_file():
+            raise HTTPException(404, 'Roteiro original não disponível para geração SEO.')
+        script = Script.model_validate_json(script_file.read_text('utf-8')).model_dump()
+        # Preserve distribution-time credit additions when present.
+        script['description'] = data.get('description') or script['description']
+        video = {'title':row['title'], 'url':row['video_url'],
+                 'credits':row['credits'], 'test':row['test']}
+        seo = build_seo_package(script, video, row['platform'])
+        data['seo'] = seo
+        db.atomic(path, json.dumps(data, ensure_ascii=False, indent=2))
+    return seo
+
+
+class SeoUpdate(BaseModel):
+    title: str = Field(min_length=1, max_length=100)
+    caption: str = Field(min_length=1, max_length=5000)
+    hashtags: list[str] = Field(max_length=15)
+    tags: list[str] = Field(max_length=30)
+    pinned_comment: str = Field(default='', max_length=300)
+    cover_text: str = Field(default='', max_length=55)
+
+
+@app.put('/api/publications/{id}/seo', dependencies=protected)
+def update_publication_seo(id: str, item: SeoUpdate):
+    from backend.seo import normalize_editor_update
+    row, path = _publication_seo_record(id)
+    if row['status'] == 'PUBLICADO':
+        raise HTTPException(409, 'Publicação já confirmada; metadados históricos preservados.')
+    data = json.loads(path.read_text('utf-8'))
+    if not data.get('seo'):
+        publication_seo(id)
+        data = json.loads(path.read_text('utf-8'))
+    try:
+        seo = normalize_editor_update(item.model_dump(), row['platform'], data['seo'])
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    data['seo'] = seo
+    db.atomic(path, json.dumps(data, ensure_ascii=False, indent=2))
+    return seo
+
+
 @app.get('/api/exports/{video_id}/{platform}', dependencies=protected)
 def export_metadata(video_id: str, platform: str):
     if platform not in ('youtube', 'tiktok', 'instagram'):

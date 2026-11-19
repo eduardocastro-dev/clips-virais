@@ -575,7 +575,10 @@ def distribute(video_id):
         folder.mkdir(parents=True, exist_ok=True)
         output = folder / f'video_{video_id}.mp4'
         shutil.copy2(final, output)
-        db.atomic(folder / f'metadata_{video_id}.json', json.dumps({**script, 'pinned_comment':script.get('cta') or 'Qual detalhe chamou mais sua atenção? Comenta aqui!', 'credits': video['credits'], 'source': video['url'],
+        from backend.seo import build_seo_package
+        seo = build_seo_package(script, video, platform)
+        db.atomic(folder / f'metadata_{video_id}.json', json.dumps({**script, 'seo': seo,
+            'pinned_comment': seo['pinned_comment'], 'credits': video['credits'], 'source': video['url'],
             'test_only': bool(video['test']), 'review': review, 'publication_id': pub['id']}, ensure_ascii=False, indent=2))
         db.execute('UPDATE publications SET output_path=:path WHERE id=:id', dict(id=pub['id'], path=str(output.relative_to(db.ROOT))))
         # This build never sends content to a social network. The creator downloads,

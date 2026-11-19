@@ -1,27 +1,22 @@
-"""Independent technical and viewer review over an actually rendered file.
+"""Technical AI review plus lightweight, non-blocking local viewer checklist.
 
-OpenAI-compatible chat endpoints in this integration accept sampled JPEG frames,
-transcript and technical probe, not MP4 video. The input modality is explicit:
-models must not claim direct access to video frames or audio they weren't given.
+Only the technical evaluator calls an LLM. The local checklist checks factual
+structure of the script and does not simulate a human viewer, assign subjective
+scores, or turn a provider outage into a production failure.
 """
 from __future__ import annotations
 import json
 import hashlib
-from concurrent.futures import ThreadPoolExecutor
 from pydantic import BaseModel, Field
 from backend import core as db, media
 from backend.integrations import IntegrationError, llm
 
-PERSON_KEYS = ('attention','understanding','fun','audiovisual','share','visual_match','energy')
 PERSON_NAMES = {
- 'attention':'Eu continuaria depois de três segundos?',
- 'understanding':'Entendi o assunto?',
- 'fun':'Achei interessante/divertido?',
- 'audiovisual':'A voz e as imagens são agradáveis?',
- 'share':'Eu comentaria ou compartilharia?',
- 'visual_match':'O que apareceu na tela combina com o que foi narrado?',
- 'energy':'O vídeo me pareceu dinâmico ou ficou morno? Indique o momento exato da queda de energia.',
+    'hook': 'Gancho registrado no roteiro',
+    'clarity': 'Texto de apoio e narração nas cenas',
+    'pacing': 'Distribuição planejada das cenas',
 }
+PERSON_KEYS = tuple(PERSON_NAMES)
 
 class TechnicalReview(BaseModel):
     scores: dict[str,float]
@@ -30,12 +25,6 @@ class TechnicalReview(BaseModel):
     original: bool
     corrections: list[str] = Field(default_factory=list)
     summary: str = ''
-
-class ViewerReview(BaseModel):
-    scores: dict[str,float]
-    evidence: dict[str,str] = Field(default_factory=dict)
-    summary: str = ''
-    boring_second: float | None = None
 
 
 def _hash(value):
@@ -77,12 +66,9 @@ def locked_from_previous(previous, context):
     tech={k:v for k,v in (previous.get('criteria') or {}).items()
           if v.get('passed') and v.get('score') is not None
           and all(old.get(field)==context.get(field) for field in deps.get(k, ('script','visual','narration')))}
-    # Viewer criteria are holistic: any new narrative, audio or footage can
-    # change the experience, so all affected opinions must be rerun.
-    viewer={k:v for k,v in (previous.get('viewer') or {}).items()
-            if v.get('passed') and v.get('score') is not None
-            and all(old.get(field)==context.get(field) for field in ('script','narration','visual'))}
-    return tech,viewer
+    # Legacy AI Pessoa scores are deliberately not reused: local checks have no
+    # subjective score and must never be used to block or approve a video.
+    return tech,{}
 
 
 def review_models(video,script,render,technical,frames,audio_check,previous):
@@ -108,19 +94,32 @@ def review_models(video,script,render,technical,frames,audio_check,previous):
         k:c.model_dump() for k,c in criteria.items() if c.enabled and k not in locked},
         'locked_scores':{k:v.get('score') for k,v in locked.items()},
         'rules':common['rules']+' Return score for every requested rubric criterion.'}
-    person_data={**common,'reviewer':'viewer','viewer_questions':{k:v for k,v in PERSON_NAMES.items() if k not in locked_viewer},
-       'locked_scores':{k:v.get('score') for k,v in locked_viewer.items()},
-       'media_presented_to_model':{**common['media_presented_to_model'],
-                                   'frames_attached':config.routes['pessoa'].vision}}
-    with ThreadPoolExecutor(max_workers=2) as ex:
-        f1=ex.submit(llm,'avaliador',video['id'],tech_data,TechnicalReview.model_json_schema(),
-                     frames[:6] if config.routes['avaliador'].vision else None)
-        f2=ex.submit(llm,'pessoa',video['id'],person_data,ViewerReview.model_json_schema(),
-                     frames[:6] if config.routes['pessoa'].vision else None)
-        tech=TechnicalReview.model_validate(f1.result())
-        person=ViewerReview.model_validate(f2.result())
-    return tech,person,locked,locked_viewer,context
+    tech=TechnicalReview.model_validate(
+        llm('avaliador',video['id'],tech_data,TechnicalReview.model_json_schema(),
+            frames[:6] if config.routes['avaliador'].vision else None)
+    )
+    return tech,None,locked,{},context
 
+
+def local_viewer_checklist(script):
+    """Cheap metadata-only suggestions; never imply that a human watched the video."""
+    scenes=list(script.scenes)
+    count=len(scenes)
+    with_narration=sum(bool(str(scene.narration).strip()) for scene in scenes)
+    with_text=sum(bool(str(scene.text).strip()) for scene in scenes)
+    hook=str(script.hook or '').strip()
+    durations=[max(0, float(scene.end)-float(scene.start)) for scene in scenes]
+    facts={
+        'hook': 'Gancho presente no campo hook.' if hook else 'Campo hook vazio; revisar abertura.',
+        'clarity': f'{with_text}/{count} cenas com texto; {with_narration}/{count} com narração.',
+        'pacing': f'{count} cenas em {script.duration:g}s; durações planejadas: '+
+                  ', '.join(f'{value:g}s' for value in durations[:12])+'.',
+    }
+    return {
+        key:{'name':title,'score':None,'min_score':None,'passed':None,
+             'evidence':facts[key], 'locked':False, 'informational':True}
+        for key,title in PERSON_NAMES.items()
+    }
 
 def evaluate(video,script,render):
     cfg=db.settings()
@@ -140,7 +139,6 @@ def evaluate(video,script,render):
             raise media.PreflightError('Verificação determinística: áudio real diverge do roteiro; '+str(audio_check))
         tech_review,person_review,locked,locked_viewer,context=review_models(video,script,render,probe,frames,audio_check,previous)
     scores={k:10. for k,c in cfg.evaluation_criteria.items() if c.enabled} if video.get('test') else (tech_review.scores if tech_review else {})
-    person_scores={k:10. for k in PERSON_KEYS} if video.get('test') else (person_review.scores if person_review else {})
     breakdown={}; problems=[]; optional=[];provided={}
     for key,c in cfg.evaluation_criteria.items():
         val=locked.get(key,{}).get('score',scores.get(key))
@@ -159,22 +157,8 @@ def evaluate(video,script,render):
             passed=True
         breakdown[key]={**c.model_dump(),'score':val,'passed':passed,'evidence':ev,
                         'locked':key in locked}
-    viewer={}
-    for key,title in PERSON_NAMES.items():
-        val=locked_viewer.get(key,{}).get('score',person_scores.get(key))
-        ev=(person_review.evidence or {}).get(key,'') if person_review else ''
-        passed=val is not None and val>=cfg.spectator_min_score
-        if val is None:
-            problems.append({'criterion':'pessoa.'+key,'problem':title+': nota ausente',
-                             'evidence':'pessoa.'+key,'correction':'Reavaliar pelo espectador'})
-        elif not 0<=val<=10:raise IntegrationError('Pessoa devolveu nota fora de 0 a 10.')
-        elif not passed and ev.strip():
-            problems.append({'criterion':'pessoa.'+key,'problem':title+f': {val:.1f}',
-                             'evidence':ev,'correction':'Ajustar o trecho referido pela Pessoa'})
-        elif not passed:
-            optional.append('Pessoa: '+title+' — sem evidência concreta, não reprovar automaticamente.')
-            passed=True
-        viewer[key]={'name':title,'score':val,'min_score':cfg.spectator_min_score,'passed':passed,'evidence':ev,'locked':key in locked_viewer}
+    # Pessoa is now a local, non-scoring checklist and cannot fail a production.
+    viewer=local_viewer_checklist(script)
     if tech_review and not tech_review.factual_supported:
         # Do not invent a failing fact if the source/model did not provide evidence.
         optional.append('Verificar afirmações sem suporte específico; encaminhar à revisão humana.')
@@ -182,14 +166,13 @@ def evaluate(video,script,render):
         optional.append('Verificar originalidade; exigir evidência antes de bloquear.')
     problems=[{'criterion':'technical','problem':msg,'evidence':'ffprobe/ffmpeg ou campo de direitos',
                'correction':'Corrigir o arquivo/render ou a licença'} for msg in hard]+problems
-    deviations=[k for k in viewer if breakdown.get(k) and viewer[k]['score'] is not None and
-                breakdown[k]['score'] is not None and abs(viewer[k]['score']-breakdown[k]['score'])>=3]
+    deviations=[]  # A local checklist does not produce subjective numeric scores.
     score=round(sum(x['score']*x['weight'] for x in breakdown.values() if x['enabled'] and x['score'] is not None)/
           max(.001,sum(x['weight'] for x in breakdown.values() if x['enabled'] and x['score'] is not None)),2)
     verdict='APROVADO' if not problems else ('REPROVADO' if hard else 'REVISAR')
     result={'verdict':verdict,'score':score,'criteria':breakdown,'scores':scores,'viewer':viewer,
-      'viewer_summary':person_review.summary if person_review else '',
-      'viewer_boring_second':person_review.boring_second if person_review else None,
+      'viewer_summary':'Checklist local e informativo (sem IA Pessoa); não representa opinião de espectadores.',
+      'viewer_boring_second':None,
       'disagreements':deviations,'issues':problems,'optional_suggestions':optional,
       'corrections':[f"{p['criterion']}: {p['correction']} ({p['evidence']})" for p in problems],
       'reason_full':'\n'.join(p['problem']+' | '+p['evidence'] for p in problems) or 'Critérios atendidos.',

@@ -89,11 +89,10 @@ def test_missing_assets_pauses_without_review_attempts():
     assert not db.rows('SELECT attempt FROM video_attempts WHERE video_id=:id',{'id':vid})
 
 
-def test_two_independent_reviewers(monkeypatch):
+def test_technical_reviewer_with_local_nonblocking_person_checklist(monkeypatch):
     from backend import evaluation
     from backend.contracts import Script
     from types import SimpleNamespace
-    import concurrent.futures
     who=db.uid()
     now=__import__('time').time()
     db.execute("INSERT INTO videos(id,run_id,url,status,created,updated,test) VALUES(:id,:run,:url,'PROCESSING',:now,:now,0)",
@@ -114,13 +113,11 @@ def test_two_independent_reviewers(monkeypatch):
         if agent=='avaliador':
             return {'scores':{k:8. for k in db.settings().evaluation_criteria},
                     'evidence':{},'factual_supported':True,'original':True,'summary':'Bom'}
-        if agent=='pessoa':
-            return {'scores':{k:8. for k in evaluation.PERSON_KEYS},
-                    'evidence':{},'summary':'Gostei','boring_second':None}
         raise AssertionError(agent)
     monkeypatch.setattr(evaluation,'llm',fake_llm)
     result=evaluation.evaluate({'id':who,'rights':'REFERENCE_ONLY','test':0},script,path)
-    assert set(called)=={'avaliador','pessoa'}
+    assert called==['avaliador']
     assert result['verdict']=='APROVADO'
-    assert all(v['passed'] for v in result['viewer'].values())
+    assert set(result['viewer'])=={'hook','clarity','pacing'}
+    assert all(v['score'] is None and v['passed'] is None and v['informational'] for v in result['viewer'].values())
     assert result['review_medium'].startswith('frames+transcript')

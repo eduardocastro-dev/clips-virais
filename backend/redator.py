@@ -26,62 +26,30 @@ def narration_ready(text):
     return ' '.join(sentences)
 
 
-def auto_reduce_narration(script: Script, target_seconds: float, max_tolerance: int) -> Script:
-    """Reduce narration automatically when LLM fails - merges scenes and removes function words."""
-    scenes = script.scenes
-    current_seconds = sum(s.end - s.start for s in scenes)
-    
-    if current_seconds <= target_seconds + max_tolerance:
+def auto_reduce_narration(script: Script, measured_seconds: float, target_seconds: float) -> Script:
+    """Conservative, measured fallback: remove exact duplicate sentences only.
+
+    Blindly deleting articles, source facts or merging scenes creates invalid or
+    misleading narration. If this cannot help, a worker retry is safer.
+    """
+    if measured_seconds <= target_seconds:
         return script
-    
-    ratio = (target_seconds + max_tolerance) / current_seconds
-    target_words = int(sum(_word_count(s.narration) for s in scenes) * ratio)
-    
-    merged_scenes = merge_small_scenes(scenes, max_duration=5.0)
-    
-    total_words = sum(_word_count(s.narration) for s in merged_scenes)
-    words_to_remove = total_words - target_words
-    
-    if words_to_remove <= 0:
-        return script
-    
-    reduced_scenes = []
-    remaining_removals = words_to_remove
-    
-    for merged in merged_scenes:
-        if remaining_removals <= 0:
-            reduced_scenes.append(merged['scene'])
-            continue
-        
-        all_texts = ' '.join(merged['texts'])
-        words = all_texts.split()
-        words_to_remove_this = min(len(words) // 3, remaining_removals)
-        
-        if words_to_remove_this > 0:
-            reduced_words = _remove_function_words(words, words_to_remove_this)
-            reduced_text = ' '.join(reduced_words)
-            reduced_scenes.append(Scene(
-                start=merged['scene'].start,
-                end=merged['scene'].end,
-                text=reduced_text[:120],
-                narration=reduced_text[:600],
-                source_id=merged['scene'].source_id,
-                source_start=merged['scene'].source_start,
-                speaker=merged['scene'].speaker,
-                emotion=merged['scene'].emotion
-            ))
-            remaining_removals -= words_to_remove_this
-        else:
-            reduced_scenes.append(merged['scene'])
-    
-    if not reduced_scenes:
-        reduced_scenes = merged_scenes
-    
-    script_data = script.model_dump()
-    script_data['scenes'] = [s.model_dump() for s in reduced_scenes]
-    script_data['duration'] = int(max(target_seconds, sum(s.end - s.start for s in reduced_scenes)))
-    
-    return Script.model_validate(script_data)
+    content = script.model_dump()
+    changed = False
+    for scene in content['scenes']:
+        phrases = re.split(r'(?<=[.!?])\s+', scene['narration'].strip())
+        unique = []
+        seen = set()
+        for phrase in phrases:
+            normalized = re.sub(r'\W+', '', phrase, flags=re.UNICODE).casefold()
+            if normalized and normalized in seen:
+                changed = True
+                continue
+            seen.add(normalized)
+            unique.append(phrase)
+        if unique:
+            scene['narration'] = ' '.join(unique)
+    return Script.model_validate(content) if changed else script
 
 
 def polish(video, script:Script, attempt:int=1):
@@ -102,7 +70,8 @@ def polish(video, script:Script, attempt:int=1):
           'properties':{'narration':{'type':'string'},'text':{'type':'string'},'speaker':{'type':'string'}},
           'required':['narration','text','speaker']}}},'required':['scenes']}
         for rewrite in range(2):
-            result=llm('redator',video['id'],{'role':'redator','today_sao_paulo':db.today(),
+            try:
+                result=llm('redator',video['id'],{'role':'redator','today_sao_paulo':db.today(),
                  'source_facts':db.read_artifact(video['id'],'cacador').dados,
                  'script':script_data,'cast':cast,'structural_feedback':structural_errors,
                  'narration_word_budget':budget,
@@ -115,7 +84,11 @@ def polish(video, script:Script, attempt:int=1):
                  'observe words_by_scene_target e o delta de palavras. A fonte não permite inventar fatos. '
                  'Cada personagem mantém seu próprio jeito de falar; frases curtas até 14 palavras e energia com naturalidade. '
                  'Não apresente alegações incertas como certezas. Não inclua selos ou falas "fato/rumor/fake/confirmado".'},schema)
-            candidate=result.get('scenes',[])
+            except IntegrationError as exc:
+                structural_errors.append('Modelo indisponível; preservando roteiro do Escritor: ' + str(exc)[:180])
+                db.log_event(video['id'],'redator','MODEL_FALLBACK',str(exc)[:300])
+                break
+            candidate=result.get('scenes',[]) if isinstance(result, dict) else []
             if len(candidate)==len(script_data['scenes']):
                 before_words=sum(_word_count(row['narration']) for row in script_data['scenes'])
                 after_words=sum(_word_count(row.get('narration') or '') for row in candidate)
@@ -198,26 +171,18 @@ def _source_context(video_id: str) -> dict:
 
 
 def _timing_improvement(before: list[str], after: list[str], issue) -> tuple[bool,int,int]:
+    """Accept a rewrite only when word count moves toward real measured speech target."""
     previous=sum(_word_count(x) for x in before)
     proposed=sum(_word_count(x) for x in after)
-    target = float(issue.target)
-    actual = float(issue.actual)
-    max_tolerance = 15
-    safe_target = target + max_tolerance
-
-    if actual <= safe_target and actual >= target - 5:
-        return True, previous, proposed
-
-    if previous == proposed:
-        return False, previous, proposed
-
-    if actual > safe_target:
-        return proposed < previous, previous, proposed
-
-    if actual < target - 2:
-        return proposed > previous, previous, proposed
-
-    return True, previous, proposed
+    target=float(issue.target)
+    actual=float(issue.actual)
+    if previous == proposed or actual <= 0:
+        return False,previous,proposed
+    # A meaningful fraction of the needed correction, not an arbitrary 15s grace.
+    needed=max(1,math.ceil(abs(previous * (target/actual-1))))
+    minimum=max(1,math.ceil(needed*.20))
+    progress=previous-proposed if actual>target else proposed-previous
+    return progress>=minimum,previous,proposed
 
 
 def _remove_function_words(words: list[str], remove_count: int) -> list[str]:
@@ -270,12 +235,8 @@ def adjust_timing(video,script:Script,issue,attempt:int,correction:int):
     """
     from backend.media import PreflightError
     target=float(issue.target)
-    max_tolerance=15
-    safe_target=target+max_tolerance
-    
-    if float(issue.actual) <= safe_target:
-        return script
-    
+    # A TimingBudgetError means the real audio is outside the allowed window.
+    # Never silently ignore 40.1-55s TTS because of a 15s editing tolerance.
     short=issue.actual<target-2
     scene_targets=_timing_targets(script,float(issue.actual),target)
     original=[scene.narration for scene in script.scenes]
@@ -377,16 +338,19 @@ def adjust_timing(video,script:Script,issue,attempt:int,correction:int):
                      f'TTS anterior={issue.actual:.2f}s; rota={agent}')
         return updated
 
-    # Fallback automático se o LLM falhar após todas as tentativas
+    # Safe fallback never removes facts, changes scenes or fakes audio duration.
     try:
-        reduced_script = auto_reduce_narration(script, target, max_tolerance)
-        if reduced_script != script:
-            folder=db.ROOT/'handoff'/video['id'];folder.mkdir(exist_ok=True,parents=True)
-            db.atomic(folder/'script.json',reduced_script.model_dump_json(indent=2))
+        reduced=auto_reduce_narration(script, float(issue.actual), target)
+        if reduced!=script:
+            folder=db.ROOT/'handoff'/video['id'];folder.mkdir(parents=True,exist_ok=True)
+            db.atomic(folder/'script.json',reduced.model_dump_json(indent=2))
             db.log_event(video['id'],'redator','AUTO_REDUCE_FALLBACK',
-                         f'Fallback automático aplicado; TTS anterior={issue.actual:.2f}s')
-            return reduced_script
-    except Exception as exc:
-        details.append(f'fallback: {str(exc)}')
-
-    raise PreflightError('Video extrapolou os 15s de tolerancia')
+                         f'Remoção apenas de frases duplicadas; TTS anterior={issue.actual:.2f}s')
+            return reduced
+    except (ValueError, TypeError) as exc:
+        details.append('fallback de duplicatas: '+str(exc)[:120])
+    raise PreflightError(
+        f'Áudio real {issue.actual:.2f}s fora de {target-2:.2f}s–{target:.2f}s; '
+        f'palavras atuais={current_words}, alvo={target_words}; '
+        'o Redator/Escritor não conseguiu alterar a duração com o combo OmniRoute. '
+        'Nova tentativa agendada pelo worker. Detalhes: '+'; '.join(details[-3:])[:420])

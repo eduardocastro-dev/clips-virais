@@ -256,14 +256,16 @@ def tick():
     except Exception as exc:
         message = str(exc)[:500] if isinstance(exc, (IntegrationError, ValueError)) else 'Erro interno no pipeline; reencaminhado para nova tentativa.'
         attempts = job['attempts'] + 1
-        failed = attempts >= 5
+        failed = attempts >= (5 if job['kind']=='pipeline' else 3)
         db.execute('UPDATE jobs SET status=:status,due=:due,lease=NULL,error=:error WHERE id=:id',
                    dict(id=job['id'], status='FAILED' if failed else 'QUEUED', due=time.time()+min(1800, 15*2**attempts), error=message))
         if job['video_id']:
             if failed:
+                # Exhausted retries are NOT creative rejection, and must not delete a render.
                 db.execute("UPDATE videos SET status=:status,error=:error,updated=:now WHERE id=:id AND manual_decision IS NULL",
-                           dict(id=job['video_id'], status='REJECTED', error=message, now=time.time()))
-                db.log_event(job['video_id'], 'worker', 'REJECTED', f'Vídeo descartado após {attempts} tentativas falhadas: {message}')
+                           dict(id=job['video_id'], status='PIPELINE_ERROR', error=message, now=time.time()))
+                db.log_event(job['video_id'], 'worker', 'RETRIES_EXHAUSTED',
+                             f'Falha técnica após {attempts} tentativas; retomada manual disponível: {message}')
             else:
                 db.execute("UPDATE videos SET status=:status,error=:error,updated=:now WHERE id=:id AND manual_decision IS NULL",
                            dict(id=job['video_id'], status='RETRY', error=message, now=time.time()))

@@ -428,7 +428,21 @@ def run_pipeline(video_id):
         final=None;render_error=None
         try:
             stage(video_id,'escritor')
-            script=write_script(video,corrections)
+            script=None
+            checkpoint=db.ROOT/'handoff'/video_id/'script.json'
+            # A technical retry is not a new creative revision: keep the
+            # validated script rather than spending a fresh Escritor call.
+            if video['status']=='RETRY' and not video.get('test') and checkpoint.is_file():
+                try:
+                    restored=Script.model_validate_json(checkpoint.read_text('utf-8'))
+                    if restored.template==video['template'] and restored.duration==video['duration']:
+                        script=restored
+                        db.log_event(video_id,'escritor','CHECKPOINT_RESTORED',
+                                     'Roteiro validado reaproveitado para nova tentativa técnica.')
+                except (OSError,ValueError):
+                    pass
+            if script is None:
+                script=write_script(video,corrections)
             stage(video_id,'redator')
             from backend.redator import polish
             script=polish(video,script,attempt)
@@ -458,7 +472,7 @@ def run_pipeline(video_id):
                 db.execute("UPDATE videos SET status='PIPELINE_ERROR',stage='editor',error=:error,updated=:now WHERE id=:id",
                            {'error':message,'now':time.time(),'id':video_id})
                 db.log_event(video_id,'editor','PREFLIGHT_ERROR',message)
-                return
+                raise media.PreflightError(message)
             if decision(video_id)=='discard':
                 return
             if decision(video_id)=='approve_pending':
@@ -478,10 +492,10 @@ def run_pipeline(video_id):
             db.notify('missing-assets:'+video_id,str(exc))
             return
         except media.PreflightError as exc:
-            db.execute("UPDATE videos SET status='PIPELINE_ERROR',stage='editor',error=:error,updated=:now WHERE id=:id",
+            db.execute("UPDATE videos SET status='RETRY',stage='editor',error=:error,updated=:now WHERE id=:id",
                        {'error':str(exc),'now':time.time(),'id':video_id})
-            db.log_event(video_id,'editor','PREFLIGHT_ERROR',str(exc))
-            return
+            db.log_event(video_id,'editor','PREFLIGHT_RETRY',str(exc)[:500])
+            raise
         except media.BriefingError as exc:
             # An actual creative inconsistency (not a broken decoder/FFmpeg/TTS)
             # returns to the Escritor under the configured review limit.
@@ -494,14 +508,14 @@ def run_pipeline(video_id):
                 db.artifact(video_id,'editor',data=result,status='REVISAR',
                     summary='Briefing divergente; devolver ao Escritor.',next_agent='escritor')
         except IntegrationError as exc:
-            # Infrastructure failures are not creative reviews. No video_attempts row,
-            # no retry-counter increment and no production-budget charge.
+            # Infrastructure/provider failures must propagate to the worker.
+            # They are NOT creative review attempts; keep existing artifacts.
             render_error=str(exc)
-            db.execute("UPDATE videos SET status='PIPELINE_ERROR',stage=:stage,error=:err,render_error=:err,updated=:now WHERE id=:id",
+            db.execute("UPDATE videos SET status='RETRY',stage=:stage,error=:err,render_error=:err,updated=:now WHERE id=:id",
                        {'err':render_error,'stage':'editor' if final is None else 'avaliador',
                         'now':time.time(),'id':video_id})
-            db.log_event(video_id,'pipeline','PIPELINE_ERROR',render_error[:500])
-            return
+            db.log_event(video_id,'pipeline','INFRA_RETRY',render_error[:500])
+            raise
         store_attempt(video_id,attempt,result,final,render_error)
         if decision(video_id) in ('discard','approved'):
             return

@@ -328,61 +328,72 @@ def llm(agent, video_id, payload, output_schema, images=None):
                       {'delta': actual_tokens-reservation, 'cost_delta': actual_cost-cost, 'day': day})
     headers = {'Authorization': 'Bearer ' + (db.secret('llm_api_key') or 'ollama')}
     # Stateless request: no shared conversation or filesystem tools.
-    last = None
-    for model in dict.fromkeys([route.model, route.fallback_model]):
-        if not model:
-            continue
-        content = prompt
-        if images:
-            if not route.vision:
-                raise IntegrationError('Modelo do agente não está habilitado para visão.')
-            content = [{'type': 'text', 'text': prompt}] + [{'type': 'image_url', 'image_url': {
-                'url': 'data:image/jpeg;base64,' + base64.b64encode(path.read_bytes()).decode(), 'detail': 'low'}} for path in images]
-        reserve()
-        try:
-            r = request('POST', config.provider_url + '/chat/completions', headers=headers, json={
-                'model': model, 'messages': [{'role': 'system', 'content': system}, {'role': 'user', 'content': content}],
-                'max_tokens': route.max_tokens, 'temperature': .3, 'response_format': {'type': 'json_object'}}).json()
-            resp_content = r['choices'][0]['message']['content']
-            if isinstance(resp_content, str):
-                cleaned = resp_content.strip()
-                if '```json' in cleaned:
-                    parts = cleaned.split('```json')
-                    if len(parts) > 1:
-                        cleaned = parts[1].split('```')[0].strip()
-                elif '```' in cleaned:
-                    parts = cleaned.split('```')
-                    if len(parts) > 1:
-                        cleaned = parts[1].split('```')[0].strip()
-                
-                try:
-                    result = json.loads(cleaned)
-                except json.JSONDecodeError:
-                    # Tenta extrair a primeira chave {...} ou [...] usando regex
-                    import re
-                    match = re.search(r'(\{.*\}|\[.*\])', cleaned, re.DOTALL)
-                    if match:
-                        result = json.loads(match.group(1))
-                    else:
-                        raise
-            else:
-                result = resp_content
-            used = r.get('usage', {}).get('total_tokens')
-            reconcile(used if isinstance(used, int) and used >= 0 else None)
-            db.log_event(video_id, agent, 'MODEL', 'Resposta estruturada recebida; consumo conciliado quando informado.', used or 0)
-            return result
-        except IntegrationError as exc:
-            # An upstream HTTP rejection has no completed generation. Don't
-            # permanently consume the Studio budget on 401/403/429, etc.
-            if any(str(exc).startswith(f'Integração respondeu HTTP {status}')
-                   for status in (400, 401, 403, 404, 422, 429)):
-                reconcile(0)
-            last = exc
-        except (ValueError, KeyError, IndexError) as exc:
-            # Malformed responses may already have consumed tokens; retain the
-            # reservation when billing information cannot be trusted.
-            last = exc
-    raise IntegrationError(f'Falha do modelo de {agent}; resposta indisponível ou inválida.') from last
+    errors=[]
+    models=list(dict.fromkeys([m for m in (route.model,route.fallback_model) if m]))
+    for model in models:
+        for retry in range(2):
+            content = prompt
+            if images:
+                if not route.vision:
+                    raise IntegrationError('Modelo do agente não está habilitado para visão.')
+                content = [{'type': 'text', 'text': prompt}] + [{'type': 'image_url', 'image_url': {
+                    'url': 'data:image/jpeg;base64,' + base64.b64encode(path.read_bytes()).decode(), 'detail': 'low'}} for path in images]
+            reserve()
+            try:
+                response = request('POST', config.provider_url + '/chat/completions', headers=headers, json={
+                    'model': model, 'messages': [{'role': 'system', 'content': system}, {'role': 'user', 'content': content}],
+                    'max_tokens': route.max_tokens, 'temperature': .3, 'response_format': {'type': 'json_object'}}).json()
+                raw = response['choices'][0]['message']['content']
+                if isinstance(raw,str):
+                    cleaned=raw.strip()
+                    if cleaned.startswith('```'):
+                        cleaned=re.sub(r'^```(?:json)?\s*|\s*```$', '', cleaned, flags=re.IGNORECASE).strip()
+                    try:
+                        result=json.loads(cleaned)
+                    except json.JSONDecodeError:
+                        # Extract just the first JSON object when the provider wraps it in prose.
+                        start=cleaned.find('{')
+                        if start<0:
+                            raise ValueError('Resposta sem objeto JSON') from None
+                        result,_=json.JSONDecoder().raw_decode(cleaned[start:])
+                else:
+                    result=raw
+                if not isinstance(result,dict) or not result:
+                    raise ValueError('Resposta do modelo não contém um objeto JSON válido')
+                missing=[key for key in output_schema.get('required',[]) if key not in result]
+                if missing:
+                    raise ValueError('JSON sem campos obrigatórios: '+', '.join(missing[:5]))
+                used=response.get('usage',{}).get('total_tokens')
+                reconcile(used if isinstance(used,int) and used>=0 else None)
+                db.log_event(video_id,agent,'MODEL',
+                             'Resposta estruturada recebida; consumo conciliado quando informado.',used or 0)
+                return result
+            except IntegrationError as exc:
+                message=str(exc)
+                # Upstream HTTP rejection means no generation; refund this reservation.
+                if any(message.startswith(f'Integração respondeu HTTP {status}')
+                       for status in (400,401,403,404,408,409,422,425,429,500,502,503,504)) or 'timeout' in message.lower():
+                    reconcile(0)
+                errors.append(f'{model}: {message[:145]}')
+                transient=('timeout' in message.lower() or 'Falha de rede' in message or
+                           any(message.startswith(f'Integração respondeu HTTP {status}')
+                               for status in (408,425,429,500,502,503,504)))
+                # Prefer the configured fallback immediately on a throttled main model.
+                if not transient or retry or (model==route.model and route.fallback_model and route.fallback_model!=model):
+                    break
+            except (ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
+                # Provider may report HTTP 200 with empty or malformed JSON.
+                # Unknown token usage is deliberately not refunded.
+                errors.append(f'{model}: {type(exc).__name__} - {str(exc)[:120]}')
+                if retry:
+                    break
+            if retry==0:
+                time.sleep(1)
+    reason='; '.join(errors[-4:])[:540]
+    db.log_event(video_id,agent,'MODEL_ERROR',reason)
+    raise IntegrationError(
+        f'Falha do modelo de {agent}; resposta indisponível ou inválida. '
+        f'Últimas causas: {reason or "nenhuma resposta válida"}')
 
 
 def youtube_token():

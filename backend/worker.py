@@ -111,6 +111,9 @@ def scheduler():
     if now - last > 3600:
         db.enqueue('maintenance', unique_key=f'maintenance:{int(now // 3600)}')
         db.put_setting('maintenance', now)
+    # Keep persisted quota diagnostics current, even in manual mode.
+    from backend import daily_quota
+    quota = daily_quota.state()
     if not config.automatic:
         db.put_setting('scheduler_status', 'Modo automático desligado.')
         return
@@ -124,9 +127,27 @@ def scheduler():
         db.put_setting('scheduler_status', 'Modo automático ativo; aguardando ou processando oportunidades.')
     # Discovery may have succeeded without creating a video (or a previous
     # queue insertion may have failed). Retry existing candidates periodically.
-    if now - db.get_setting('last_auto_queue', 0) >= 60:
-        db.put_setting('last_auto_queue', now)
-        queue_opportunities()
+    if daily_quota.within_deadline(quota['config']):
+        if now - db.get_setting('last_auto_queue', 0) >= 60:
+            db.put_setting('last_auto_queue', now)
+            queue_opportunities()
+        # Top-20 discovery does not require downloads. YouTube API key is a
+        # prerequisite; missing credentials never stop existing Shorts jobs.
+        if db.secret('youtube_api_key'):
+            if now-db.get_setting('top20_last_attempt',0)>=24*3600:
+                db.enqueue('top20_refresh',unique_key='top20:'+db.today())
+                db.put_setting('top20_last_attempt',now)
+            if now-db.get_setting('radar20_last_attempt',0)>=2*3600:
+                db.enqueue('radar20_scan',unique_key=f'radar20:{int(now//7200)}')
+                db.put_setting('radar20_last_attempt',now)
+            try:
+                from backend.live_cuts import enqueue_next
+                outcome=enqueue_next()
+                db.put_setting('live_clip_scheduler_status',
+                               outcome.get('reason') or
+                               'Corte de live enfileirado para revisão automática.')
+            except Exception as exc:
+                db.log_event(None,'live_cuts','SCHEDULER_ERROR',str(exc)[:400])
     last = db.get_setting('last_search', 0)
     if now - last >= config.search_minutes * 60:
         db.enqueue('discover', unique_key=f'discover:{int(now // (config.search_minutes * 60))}')
@@ -162,10 +183,12 @@ def queue_opportunities():
             if db.production_usage() >= config.daily_limit:
                 break
             if opportunity['platform']=='news':
-                create_video(reference=json.loads(opportunity['metadata']))
+                created_id=create_video(reference=json.loads(opportunity['metadata']))
             else:
                 recommended=db.get_setting('recommendations', {}).get('template') or 'gta-news'
-                create_video(ImportRequest(url=opportunity['url'],duration=db.settings().duration,template=recommended))
+                created_id=create_video(ImportRequest(url=opportunity['url'],duration=db.settings().duration,template=recommended))
+            # Only automatically queued Shorts participate in quota's 3-attempt policy.
+            db.put_setting('quota_auto_shorts:'+created_id, True)
             db.log_event(None, 'worker', 'AUTO_QUEUE', f'Oportunidade enfileirada automaticamente: {opportunity["url"]}')
             break
         except Exception as exc:
@@ -179,6 +202,17 @@ def perform(job):
     kind = job['kind']
     if kind == 'pipeline':
         run_pipeline(job['video_id'])
+    elif kind.startswith('live_cut:'):
+        from backend.live_clip_render import render_clip
+        render_clip(kind.split(':',1)[1])
+    elif kind == 'top20_refresh':
+        from backend.viral_radar20 import refresh_creators
+        refresh_creators()
+    elif kind == 'radar20_scan':
+        from backend.viral_radar20 import scan_recent,stored_top_creators
+        if not stored_top_creators().get('channels'):
+            return
+        scan_recent()
     elif kind.startswith('split:'):
         from backend.clips import split_asset
         split_asset(kind.split(':',1)[1])
@@ -241,6 +275,22 @@ def tick():
     if not job:
         deliver_notifications()
         return False
+    from backend.daily_quota import within_deadline,config as quota_config
+    is_quota_job=(job['kind'].startswith('live_cut:') or
+                  (job['kind']=='pipeline' and job['video_id'] and
+                   db.get_setting('quota_auto_shorts:'+job['video_id'],False)))
+    if is_quota_job and not within_deadline(quota_config()):
+        message='Horário limite da cota diária atingido; item não iniciado.'
+        db.execute("UPDATE jobs SET status='PAUSED',lease=NULL,error=:error WHERE id=:id",
+                   {'id':job['id'],'error':message})
+        if job['kind'].startswith('live_cut:'):
+            db.execute("UPDATE live_clips SET status='BLOCKED',error=:error,updated=:now WHERE id=:id",
+                       {'error':message,'now':time.time(),'id':job['kind'].split(':',1)[1]})
+        elif job['video_id']:
+            db.execute("UPDATE videos SET status='PIPELINE_ERROR',error=:error,updated=:now WHERE id=:id",
+                       {'error':message,'now':time.time(),'id':job['video_id']})
+        db.log_event(job['video_id'],'worker','QUOTA_DEADLINE',message)
+        return False
     stop = threading.Event()
     def heartbeat():
         while not stop.wait(30):
@@ -256,7 +306,13 @@ def tick():
     except Exception as exc:
         message = str(exc)[:500] if isinstance(exc, (IntegrationError, ValueError)) else 'Erro interno no pipeline; reencaminhado para nova tentativa.'
         attempts = job['attempts'] + 1
-        failed = attempts >= (5 if job['kind']=='pipeline' else 3)
+        cap=(3 if job['kind']=='pipeline' and job['video_id'] and
+             db.get_setting('quota_auto_shorts:'+job['video_id'],False) else
+             5 if job['kind']=='pipeline' else 3)
+        failed = attempts >= cap
+        if job['kind'].startswith('live_cut:'):
+            from backend.live_cuts import mark_failed
+            mark_failed(job['kind'].split(':',1)[1],message,attempts)
         db.execute('UPDATE jobs SET status=:status,due=:due,lease=NULL,error=:error WHERE id=:id',
                    dict(id=job['id'], status='FAILED' if failed else 'QUEUED', due=time.time()+min(1800, 15*2**attempts), error=message))
         if job['video_id']:

@@ -31,6 +31,8 @@ services:
       context: .
       dockerfile: backend/Dockerfile
       target: runtime
+      args:
+        INSTALL_WHISPERX: ${INSTALL_WHISPERX:-0}
     command: [python, -m, backend.worker]
     environment: *env
     volumes: *volumes

@@ -62,6 +62,13 @@ def init_db():
         interval_minutes INTEGER, last_checked REAL, error TEXT)''',
         '''CREATE TABLE IF NOT EXISTS metrics (id TEXT PRIMARY KEY, publication_id TEXT, observed REAL,
         data TEXT, FOREIGN KEY(publication_id) REFERENCES publications(id))''',
+        '''CREATE TABLE IF NOT EXISTS live_clips (
+            id TEXT PRIMARY KEY, video_id TEXT NOT NULL UNIQUE, channel_id TEXT NOT NULL,
+            title TEXT NOT NULL, source_url TEXT NOT NULL, rights_evidence TEXT NOT NULL,
+            status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, score REAL,
+            segment_start REAL, segment_end REAL, file_path TEXT, error TEXT,
+            created REAL NOT NULL, updated REAL NOT NULL)''',
+        'CREATE INDEX IF NOT EXISTS idx_live_clips_status_created ON live_clips(status,created)',
         '''CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, video_id TEXT, agent TEXT,
         status TEXT, summary TEXT, tokens INTEGER DEFAULT 0, created REAL)''',
         'CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, value TEXT, expires REAL)',

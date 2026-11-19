@@ -80,43 +80,84 @@ def transcribe(path, auto_language=False):
 
 
 def subtitles(script, style, target, transcript=None, styled_hook=False):
+    """Readable cinematic captions from measured word timestamps or real TTS phrases."""
+    from backend.viral_edit import caption_groups, short_cta
     lines = ['[Script Info]', 'ScriptType: v4.00+', 'PlayResX: 1080', 'PlayResY: 1920', '[V4+ Styles]',
              'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
-             f'Style: Default,DejaVu Sans,{style["font_size"]},&H00FFFFFF,&H00FFFFFF,&H00101321,&H80000000,-1,0,0,0,100,100,0,0,1,4,1,2,90,90,745,1',
-             'Style: Header,DejaVu Sans,65,&H00FFFFFF,&H00FFFFFF,&H00101321,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,8,90,90,240,1',
-             'Style: Badge,DejaVu Sans,34,&H00FFFFFF,&H00FFFFFF,&H00101321,&H80000000,-1,0,0,0,100,100,0,0,1,2,1,8,90,90,90,1',
+             f'Style: Default,DejaVu Sans,{max(46,min(68,int(style["font_size"])+6))},&H00FFFFFF,&H00FFFFFF,&H00101321,&H80000000,-1,0,0,0,100,100,0,0,1,5,2,2,90,90,850,1',
+             'Style: Header,DejaVu Sans,64,&H00FFFFFF,&H00FFFFFF,&H00101321,&H80000000,-1,0,0,0,100,100,0,0,1,4,1,8,90,90,255,1',
+             'Style: Badge,DejaVu Sans,31,&H00FFFFFF,&H00FFFFFF,&H00101321,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,8,90,90,90,1',
              '[Events]', 'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text']
-    badge_label = clean_subtitle(str(style.get('badge') or 'GTA 6')).upper()
-    lines.append(f'Dialogue: 0,0:00:00.00,0:00:03.00,Badge,,0,0,0,,{{\\an8\\pos(540,95)\\fad(100,100)\\1c&H00F4FF&}}★ {badge_label} ★')
+    badge = clean_subtitle(str(style.get('badge') or 'GTA 6')).upper()[:24]
+    lines.append(fr'Dialogue: 0,0:00:00.00,0:00:02.25,Badge,,0,0,0,,{{\an8\pos(540,94)\fad(80,100)\1c&H00F4FF&}}★ {badge} ★')
     if not styled_hook:
-        hook='\\N'.join(textwrap.wrap(clean_subtitle(script.hook),24))
-        lines.append(f'Dialogue: 0,0:00:00.15,0:00:03.00,Header,,0,0,0,,{{\\fad(120,100)}}{hook}')
+        hook = r'\N'.join(textwrap.wrap(clean_subtitle(script.hook), 23)[:3])
+        lines.append(fr'Dialogue: 0,0:00:00.16,0:00:02.40,Header,,0,0,0,,{{\an8\pos(540,245)\fad(90,130)\fscx104\fscy104}}{hook}')
     if script.cta:
-        cta='\\N'.join(textwrap.wrap(clean_subtitle(script.cta),28))
-        lines.append(f'Dialogue: 2,{subtitle_time(max(0,script.duration-3))},{subtitle_time(script.duration)},Header,,0,0,0,,{{\\an5\\pos(540,1350)\\fad(100,100)}}{cta}')
-    for scene in script.scenes:
-        text = '\\N'.join(textwrap.wrap(clean_subtitle(scene.text), 24))
-        if scene.end>max(3,scene.start):
-            lines.append(f'Dialogue: 0,{subtitle_time(max(3,scene.start))},{subtitle_time(scene.end)},Header,,0,0,0,,{{\\fad(150,150)}}{text}')
-        if transcript:
-            continue
-        words = clean_subtitle(scene.narration).split()
-        chunks = [' '.join(words[i:i+6]) for i in range(0, len(words), 6)]
-        for index, chunk in enumerate(chunks):
-            start = scene.start + (scene.end - scene.start) * index / len(chunks)
-            end = scene.start + (scene.end - scene.start) * (index + 1) / len(chunks)
-            lines.append(f'Dialogue: 1,{subtitle_time(start)},{subtitle_time(end)},Default,,0,0,0,,{{\\fad(70,70)}}{chunk}')
-    if transcript and transcript.get('words'):
-        highlight_color = str(style.get('highlight_color') or '&H00F4FF&').replace('&', r'\1c&')
-        if not highlight_color.startswith(r'\1c'): highlight_color = r'\1c' + highlight_color
-        keywords={'GTA','VI','6','VICE','CITY','ROCKSTAR','TRAILER','GAMEPLAY','NOVO','OFICIAL','DATA','MAPA','LUCIA','JASON'}
-        for item in transcript['words']:
-            token=clean_subtitle(str(item.get('text','')).strip())
-            if not token:continue
-            color=highlight_color if any(x.upper() in keywords for x in re.findall(r'[A-Za-zÀ-ÿ0-9]+',token)) else ''
-            start=float(item['start']);end=max(start+.06,float(item['end']))
-            effect=r'\fscx114\fscy114\fad(40,60)'+color
-            lines.append(f'Dialogue: 1,{subtitle_time(start)},{subtitle_time(end)},Default,,0,0,0,,{{{effect}}}{token}')
+        # The old three-second CTA at Y=1350 obscured the presenter and the video.
+        cta = short_cta(clean_subtitle(script.cta))
+        lines.append(f'Dialogue: 2,{subtitle_time(max(0,script.duration-2.1))},'
+                     f'{subtitle_time(script.duration-.12)},Header,,0,0,0,,'
+                     fr'{{\an5\pos(540,740)\fs47\fad(90,140)\bord5}}{cta}')
+    for index, scene in enumerate(script.scenes):
+        # Do not repeat the same full-screen headline through every scene.
+        begin=max(2.55, float(scene.start)+.10)
+        end=min(float(scene.end),begin+1.15)
+        if end>begin+.20 and index>0:
+            text=r'\N'.join(textwrap.wrap(clean_subtitle(scene.text),24)[:2])
+            lines.append(f'Dialogue: 0,{subtitle_time(begin)},{subtitle_time(end)},'
+                         fr'Header,,0,0,0,,{{\an8\pos(540,248)\fs49\fad(100,120)}}{text}')
+    groups=caption_groups(transcript)
+    if groups:
+        keyword_color = str(style.get('highlight_color') or '&H00F4FF&')
+        if not keyword_color.startswith('&H') or not keyword_color.endswith('&'):
+            keyword_color='&H00F4FF&'
+        for group in groups:
+            start=max(0., float(group['start']))
+            end=min(float(script.duration),float(group['end'])+.11)
+            if end<=start:
+                continue
+            syllables=[]
+            for wi,item in enumerate(group['words']):
+                # Karaoke advances on *real* word boundaries, with silent gaps.
+                next_start=(group['words'][wi+1]['start'] if wi+1<len(group['words'])
+                            else float(item['end']))
+                centis=max(1,round((max(float(item['end']),float(next_start))-
+                                     (start if wi==0 else float(item['start'])))*100))
+                syllables.append(r'{\kf'+str(centis)+'}'+clean_subtitle(item['text']))
+            joined=' '.join(syllables)
+            effect=r'\an2\pos(540,1000)\bord5\shad2\fad(60,80)'+r'\1c'+keyword_color
+            effect+=r'\2c&H00FFFFFF&'
+            lines.append(f'Dialogue: 1,{subtitle_time(start)},{subtitle_time(end)},Default,,0,0,0,,'
+                         '{'+effect+'}'+joined)
+    elif transcript and transcript.get('phrases'):
+        # Only phrase-level durations were measured by Piper + ffprobe: never invent
+        # exact individual word timestamps. Keep lines readable where possible.
+        for phrase in transcript['phrases']:
+            try:
+                start,end=float(phrase['start']),float(phrase['end'])
+            except (KeyError,TypeError,ValueError):
+                continue
+            text=clean_subtitle(str(phrase.get('text') or '')).strip()
+            if not text or end<=start:
+                continue
+            wrapped=textwrap.wrap(text, 28)
+            if len(wrapped)>3:
+                wrapped=wrapped[:3]
+                wrapped[-1]=wrapped[-1].rstrip(' ,.;')+'…'
+            words=r'\N'.join(wrapped)
+            lines.append(f'Dialogue: 1,{subtitle_time(start)},{subtitle_time(min(end,script.duration))},'
+                         'Default,,0,0,0,,{\\an2\\pos(540,1000)\\fs49\\fad(70,70)}'+words)
+    elif not transcript:
+        # Test-only synthetic narration keeps prior approximate scene text.
+        for scene in script.scenes:
+            words=clean_subtitle(scene.narration).split()
+            chunks=[' '.join(words[i:i+4]) for i in range(0,len(words),4)]
+            for i,chunk in enumerate(chunks):
+                start=scene.start+(scene.end-scene.start)*i/max(1,len(chunks))
+                end=scene.start+(scene.end-scene.start)*(i+1)/max(1,len(chunks))
+                lines.append(f'Dialogue: 1,{subtitle_time(start)},{subtitle_time(end)},'
+                             'Default,,0,0,0,,{\\an2\\pos(540,1000)\\fad(60,70)}'+chunk)
     target.write_text('\n'.join(lines), encoding='utf-8')
 
 
@@ -214,15 +255,15 @@ def render(video, script: Script, attempt=1):
         previous_emotion_by_speaker[who]=actual
         args+=['-loop','1','-framerate','1','-i',str(avatar)]
         input_index=idx+(3 if hook_overlay else 2)
-        graph.append(f'[{input_index}:v]scale=720:850:force_original_aspect_ratio=decrease,format=rgba[avatar{idx}]')
+        graph.append(f'[{input_index}:v]scale=880:1010:force_original_aspect_ratio=decrease,format=rgba[avatar{idx}]')
         label=f'overlay{idx}'
         start,end=section['start'],section['end']
         side_x='38' if idx%2==0 else 'W-w-155'
-        graph.append(f"[{current}][avatar{idx}]overlay=x={side_x}:y=1110+5*sin(2*PI*t/3):enable='between(t,{start:.3f},{end:.3f})'[{label}]")
+        graph.append(f"[{current}][avatar{idx}]overlay=x={side_x}:y=1110+9*sin(2*PI*t/2.7):enable='between(t,{start:.3f},{end:.3f})'[{label}]")
         current=label
         pose_report.append({'speaker':who,'requested_emotion':section['emotion'],'emotion':actual,
                             'file':str(avatar.relative_to(db.ROOT)),'start':start,'end':end,'layout':'bust','side':'left' if idx%2==0 else 'right',
-                            'scale_px':[720,850], 'safe_zone':'face_above_bottom_18_percent'})
+                            'scale_px':[880,1010], 'safe_zone':'face_above_bottom_18_percent'})
     db.atomic(work/'pose-timeline.json',json.dumps(pose_report,ensure_ascii=False,indent=2))
     args+=['-filter_complex',';'.join(graph),'-map',f'[{current}]']
     args+=['-map','1:a:0','-t',str(script.duration),'-c:v','libx264','-preset','veryfast','-crf','22',
@@ -232,7 +273,14 @@ def render(video, script: Script, attempt=1):
     # Soundtrack is optional and never overwrites the original media library.
     from backend.audio_mix import mix
     try:
-        mixed=mix(video['id'],temporary,work,script.duration)
+        # Align licensed SFX to actual montage cuts, not an arbitrary timer.
+        cut_events=[]
+        elapsed=0.
+        for scene_visual in visuals:
+            for segment in scene_visual.get('segments',[]):
+                elapsed+=float(segment.get('duration') or 0)
+                cut_events.append(round(elapsed,3))
+        mixed=mix(video['id'],temporary,work,script.duration,events=cut_events[:-1])
     except IntegrationError as exc:
         raise PreflightError('Não foi possível mixar música/narração com os assets cadastrados: '+str(exc)) from exc
     os.replace(mixed,final)

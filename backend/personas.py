@@ -18,7 +18,7 @@ PRESETS={
  'dante_palma':{
   'name':'Dante Palma','look':'Cabelo volumoso castanho ondulado, óculos espelhados azuis, camisa floral noturna e paletó creme, microfone retrô',
   'personality':'Locutor satírico, sofisticado demais para a própria estação, amistoso e irônico',
-  'voice':'barítono relaxado, compassado, PT-BR',
+  'voice':'barítono de rádio, expressivo e claro, PT-BR',
   'catchphrases':['Palma na pista, notícia na mesa.','Meu paletó brilha, a fonte tem que brilhar também.','O radar não para!','Pisa leve na teoria!','Fala a cidade, confere o Dante.'],
   'opening':'Boa noite, asfalto brilhante! Dante Palma na sua frequência.',
   'closing':'Eu fico com o neon; você fica com os fatos. Até já!',
@@ -37,13 +37,13 @@ PRESETS={
 
 # Full cast: these are independent fictional GTA news characters, not copyrighted likenesses.
 PRESETS['dante_palma'].update(role='apresentador',style='confiante, levemente vaidoso, humor seco',
-    speed=0.96,pauses='pausas suaves antes de revelações',phrases=['Eis o que sabemos.','Olha o detalhe que escapou!'])
+    speed=1.02,pauses='pausas curtas e naturais; ênfase com pontuação nas revelações',phrases=['Eis o que sabemos.','Olha o detalhe que escapou!'])
 PRESETS['lia_varela']={
     'name':'Lia Varela','role':'analista',
     'look':'Cabelo preto curto com mecha lateral violeta, óculos discretos, jaqueta azul-marinho e camiseta branca, iluminação de estúdio Miami',
     'personality':'Analista calma e curiosa; explica contexto e detalhes escondidos com humor discreto e linguagem acessível.',
     'voice':'PT-BR médio-grave, serena, velocidade moderada, pausas em dados e datas',
-    'speed':0.92,'pauses':'naturais entre os argumentos',
+    'speed':1.00,'pauses':'naturais entre os argumentos',
     'catchphrases':['Vamos separar as coisas.','O que a fonte diz?'],
     'opening':'Olha o detalhe que quase passou despercebido!','closing':'Agora me conta o que você achou.',
     'never':['Não chama rumor de confirmação','Não finge ter visto imagens não fornecidas','Não copia bordões ou vozes reais'],
@@ -53,7 +53,7 @@ PRESETS['caio_rivas']={
     'look':'Cabelo castanho curto, óculos esportivos escuros, camisa coral com jaqueta de tecido técnico, gravador portátil',
     'personality':'Repórter ágil, objetivo e curioso, com humor observacional sem exageros.',
     'voice':'PT-BR claro, ritmo mais rápido, com pausas breves em fatos importantes',
-    'speed':1.05,'pauses':'curtas entre notícias',
+    'speed':1.08,'pauses':'curtas entre notícias',
     'catchphrases':['Chegou agora no radar.','Olha o que chegou no radar!'],
     'opening':'A notícia acaba de entrar no radar.','closing':'Até a próxima atualização!',
     'never':['Não afirma boatos como notícias','Não inventa números','Não imita personagens ou celebridades'],

@@ -1,10 +1,10 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "guide_id": "gta-studio-neon-broadcast",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "status": "CREATIVE_DIRECTION_PROPOSED",
   "language": "pt-BR",
-  "purpose": "Fonte unica de verdade para escolhas de estilo dos agentes especializados; NAO um laudo de medicao dos links.",
+  "purpose": "Fonte de estilos originais do GTA Studio; proposta criativa inspirada em princípios públicos de vídeos curtos, sem reproduzir um vídeo recordista.",
   "provenance": {
     "method": "briefing criativo do usuario + leitura da configuracao atual do GTA Studio + pesquisa publica sobre ferramentas",
     "video_files_downloaded": 0,
@@ -12,7 +12,18 @@
     "visual_content_of_provided_urls_verified": false,
     "rule_frequency_3plus_verified": false,
     "numeric_parameter_status": "defaults_criativos_propostos_nao_medidos",
-    "do_not_claim_observed_metrics": true
+    "do_not_claim_observed_metrics": true,
+    "case_study": "auditoria interna do MP4 GTA Studio 032fc35ec31d465f83b75141bd2c21f4 (2026-11-19)",
+    "last_user_video_measurement": {
+      "duration_seconds": 30,
+      "width_px": 1080,
+      "height_px": 1920,
+      "fps": 30,
+      "loudness_lufs": -22.7,
+      "true_peak_dbfs": -9.7,
+      "method": "FFprobe, FFmpeg ebur128; inspeção de frames a cada 1-2 segundos",
+      "confidence": "directly_measured"
+    }
   },
   "reference_links": {
     "youtube_shorts": [
@@ -114,10 +125,13 @@
     "caption_shadow_opacity": 0.75,
     "caption_words_per_group": 4,
     "max_caption_lines": 2,
-    "caption_center_y_px": 1390,
+    "caption_center_y_px": 1000,
     "caption_highlight_scale": 1.12,
     "require_word_level_timestamp_for_word_level_motion": true,
-    "no_word_timestamp_fallback": "usar legendas por frase sem fingir sincronismo preciso"
+    "no_word_timestamp_fallback": "usar legendas por frase sem fingir sincronismo preciso",
+    "caption_max_characters": 31,
+    "caption_mode": "time-aligned four-word ASS karaoke using actual Whisper/faster_whisper word timestamps",
+    "phrase_fallback": "when aligned words unavailable, one caption per Piper+FFprobe measured phrase; never fabricate word timing"
   },
   "editing": {
     "hook_window_seconds": 3,
@@ -179,7 +193,18 @@
       "persona_overlay"
     ],
     "prevent_same_layout_on_adjacent_scenes": true,
-    "select_layout_by_narrative_beat": true
+    "select_layout_by_narrative_beat": true,
+    "news_overlay_visible_duration_seconds": [
+      0.5,
+      1.6
+    ],
+    "source_screenshot_max_per_video": 2,
+    "recommended_editorial_templates": [
+      "gta-radar-viral",
+      "gta-detail-breakdown",
+      "gta-hype-reaction"
+    ],
+    "originality_rule": "Use learned ideas (hook, pacing, clarity) but never copy a named creator's sequence or protected graphics."
   },
   "motion": {
     "allowed_easing": [
@@ -235,7 +260,12 @@
     "stagger_between_caption_words_ms": 0,
     "allow_glitch_or_morph_only_after_guide_revision": true,
     "sfx_sync_tolerance_frames": 2,
-    "motion_budget": "Efeitos fortes em destaques, nunca em toda frase."
+    "motion_budget": "Efeitos fortes em destaques, nunca em toda frase.",
+    "camera_profiles_by_segment": [
+      "push_in",
+      "drift_left",
+      "drift_right"
+    ]
   },
   "audio": {
     "target_integrated_lufs": -14,
@@ -255,7 +285,16 @@
     "bpm": "track_dependent_not_measured",
     "must_attach_track_id_and_license_evidence": true,
     "epidemic_sound_free_api_not_commercially_licensed": true,
-    "no_unlicensed_sfx_fallback": true
+    "no_unlicensed_sfx_fallback": true,
+    "target_true_peak_dbfs": -1.5,
+    "voice_presence": {
+      "highpass_hz": 80,
+      "presence_equalizer_hz": 2500,
+      "presence_gain_db": 1.5,
+      "compressor_ratio": 2.2,
+      "required_even_without_music": true
+    },
+    "sfx_strategy": "opening + one accent every third actual montage cut, only when licensed, not every 5 seconds"
   },
   "story": {
     "hook_window_seconds": 3,
@@ -276,7 +315,9 @@
         "id": "vice_city_talk",
         "goal": "comentario original com persona e humor moderado"
       }
-    ]
+    ],
+    "cta_max_chars": 48,
+    "cta_on_screen_seconds": 2.1
   },
   "toolchain": {
     "transcription": {
@@ -306,6 +347,7 @@
     "no_edits_to_rights_validation": true,
     "license_required_for_every_render_asset": true,
     "existing_pipeline_must_remain_functional": true,
-    "no_premiere_assumed_in_docker": true
+    "no_premiere_assumed_in_docker": true,
+    "ignore_viral_celebrity_record_templates": true
   }
 }

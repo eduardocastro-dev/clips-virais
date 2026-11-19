@@ -58,7 +58,7 @@
     "badge": "SHOWCASE VISUAL",
     "badge_color": "0xf59e0b",
     "pacing": "cinematic",
-    "cut_seconds": 3.0,
+    "cut_seconds": 3,
     "animation_style": "ken_burns",
     "highlight_color": "&H00D4FF&",
     "editorial_guideline": "Tom imersivo com cortes contemplativos, destacando a atmosfera de Vice City, iluminação global, densidade da água e tecnologia de ponta."
@@ -74,7 +74,7 @@
     "badge": "DETALHES INSANOS",
     "badge_color": "0x10b981",
     "pacing": "dynamic",
-    "cut_seconds": 2.0,
+    "cut_seconds": 2,
     "animation_style": "pop_card",
     "highlight_color": "&H00FFB0&",
     "editorial_guideline": "Estrutura rápida no formato 'Top Detalhes / Fatos que você não percebeu', mantendo o espectador ligado em cada curiosidade confirmada."
@@ -94,5 +94,53 @@
     "animation_style": "pop_card",
     "highlight_color": "&H0080FF&",
     "editorial_guideline": "Tom participativo e entusiasmado com a persona em destaque, reagindo às especulações e debatendo o impacto no mundo dos games."
+  },
+  "gta-radar-viral": {
+    "name": "Radar GTA 6 · Viral",
+    "background": "0x101827",
+    "accent": "0x22d3ee",
+    "font_size": 62,
+    "transition": "fade",
+    "framing": "center-crop",
+    "identity": "news",
+    "badge": "RADAR GTA 6",
+    "badge_color": "0xf43f5e",
+    "pacing": "high_energy",
+    "cut_seconds": 1.7,
+    "animation_style": "slide_in",
+    "highlight_color": "&H00F4FF&",
+    "editorial_guideline": "Gancho factual em até 2 segundos; cortes entre detalhes visuais reais, palavras-chave e contexto; apresentador expressivo mas claro. Sem copiar criadores nem transformar rumores em fatos. CTA curto."
+  },
+  "gta-detail-breakdown": {
+    "name": "GTA em Detalhes · Análise",
+    "background": "0x20162e",
+    "accent": "0xc4b5fd",
+    "font_size": 60,
+    "transition": "fade",
+    "framing": "center-crop",
+    "identity": "theory",
+    "badge": "OLHA O DETALHE",
+    "badge_color": "0x8b5cf6",
+    "pacing": "dynamic",
+    "cut_seconds": 2.2,
+    "animation_style": "zoom_pulse",
+    "highlight_color": "&H00FDBA&",
+    "editorial_guideline": "Foco em uma evidência visual por vez, movimentos suaves de câmera e explicação objetiva. Comparações só quando fontes permitem. CTA com pergunta original."
+  },
+  "gta-hype-reaction": {
+    "name": "Vice City Talk · Hype",
+    "background": "0x25151d",
+    "accent": "0xfda4af",
+    "font_size": 62,
+    "transition": "fade",
+    "framing": "center-crop",
+    "identity": "reaction",
+    "badge": "VICE CITY TALK",
+    "badge_color": "0xec4899",
+    "pacing": "energetic",
+    "cut_seconds": 1.8,
+    "animation_style": "pop_card",
+    "highlight_color": "&H0080FF&",
+    "editorial_guideline": "Comentário entusiasmado com reação do apresentador, cortes de impacto apenas em ênfases e humor pontual. Distinguir opinião de notícia; não fabricar suspense."
   }
 }

@@ -265,7 +265,7 @@ def select_visuals(video,script):
         # Stagger article screenshot/card over some scene segments, never full article mirrors.
         if segments:
             chosen=segments[0]
-            if screenshots:
+            if screenshots and index in (0, min(2, len(script.scenes)-1)):
                 ranked=sorted(screenshots,key=lambda shot:
                     (-len(scene_tokens & words(shot.get('excerpt',''))),shot['kind']!='headline'))
                 shot=ranked[index%len(ranked)] if len(ranked)>1 else ranked[0]

@@ -15,7 +15,7 @@ def title_card(text: str, source: str, path: Path, badge: str = 'RADAR GTA 6', a
     """Locally generated modern editorial card using short original headline."""
     from PIL import Image, ImageDraw, ImageFont
     width, height = 860, 680
-    image = Image.new('RGBA', (width, height), (15, 23, 42, 245))
+    image = Image.new('RGBA', (width, height), (15, 23, 42, 215))
     d = ImageDraw.Draw(image)
     d.rounded_rectangle((15, 15, width - 15, height - 15), radius=32, outline=accent, width=6)
     badge_text = str(badge).upper()[:22]
@@ -33,7 +33,7 @@ def title_card(text: str, source: str, path: Path, badge: str = 'RADAR GTA 6', a
     for i, line in enumerate(lines):
         d.text((55, 140 + i * 80), line, font=font, fill='white', stroke_width=1, stroke_fill='#090d16')
     d.line((50, height - 85, width - 50, height - 85), fill=accent, width=4)
-    d.text((55, height - 60), 'GTA CONTENT STUDIO · REPORTAGEM EXCLUSIVA', font=small, fill='#64748b')
+    d.text((55, height - 60), 'GTA 6 BRASIL · DIREÇÃO EDITORIAL', font=small, fill='#94a3b8')
     image.save(path)
     return path
 
@@ -84,7 +84,13 @@ def _filtered_base(ff, spec, seconds, path, work, index):
     args=[ff,'-y']
     if base_kind=='video':
         args+=['-stream_loop','-1','-ss',str(spec.get('source_offset',0)),'-i',base]
-        visual='scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1'
+        # Gentle alternating virtual camera motion; keep the original footage unaltered.
+        from backend.viral_edit import camera_profile
+        profile=camera_profile(index)
+        horizontal=('30+20*sin(t*0.85)' if profile=='push_in' else
+                    '30+23*sin(t*0.65)' if profile=='drift_left' else '30-23*sin(t*0.65)')
+        visual=('scale=1140:2025:force_original_aspect_ratio=increase,crop=1140:2025,'
+                f'crop=1080:1920:x={horizontal}:y=52+25*cos(t*0.55),setsar=1')
     else:
         args+=['-loop','1','-framerate','30','-i',base]
         visual="scale=1100:1970:force_original_aspect_ratio=increase,crop=1100:1970,zoompan=z='min(zoom+0.0007,1.15)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=1:s=1080x1920:fps=30"
@@ -99,14 +105,17 @@ def _filtered_base(ff, spec, seconds, path, work, index):
         label=spec.get('overlay_label') or 'FONTE ORIGINAL'
         src_url=spec.get('overlay_source') or ''
         overlay=str(style_screenshot_card(raw_overlay,styled_overlay,src_url,badge='FONTE ORIGINAL' if label!='thumbnail' else 'THUMBNAIL FONTE'))
-    if overlay:
+    from backend.viral_edit import overlay_window
+    visible=overlay_window(seconds) if overlay else None
+    if overlay and visible:
         args+=['-loop','1','-framerate','30','-i',overlay]
-        until=max(.6,min(4.5,seconds-.2))
+        begin,until=visible
         filt=(
             f'[0:v]{visual}[base];'
-            f'[1:v]scale=840:960:force_original_aspect_ratio=decrease,format=rgba,'
-            f'fade=t=in:st=0:d=0.20:alpha=1,fade=t=out:st={until-0.20:.2f}:d=0.20:alpha=1[card];'
-            f'[base][card]overlay=x=(W-w)/2:y=150+5*sin(2*PI*t/3.5):enable=\'between(t,0.15,{until:.2f})\'[video]'
+            f'[1:v]scale=760:740:force_original_aspect_ratio=decrease,format=rgba,'
+            f'fade=t=in:st=0:d=0.16:alpha=1,fade=t=out:st={until-.16:.2f}:d=0.16:alpha=1[card];'
+            f'[base][card]overlay=x=(W-w)/2:y=360+7*sin(2*PI*t/3.5):'
+            f"enable='between(t,{begin:.2f},{until:.2f})'[video]"
         )
         args+=['-filter_complex',filt,'-map','[video]']
     else:

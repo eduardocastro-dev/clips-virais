@@ -79,7 +79,7 @@ def transcribe(path, auto_language=False):
         result_path.unlink(missing_ok=True)
 
 
-def subtitles(script, style, target, transcript=None):
+def subtitles(script, style, target, transcript=None, styled_hook=False):
     lines = ['[Script Info]', 'ScriptType: v4.00+', 'PlayResX: 1080', 'PlayResY: 1920', '[V4+ Styles]',
              'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
              f'Style: Default,DejaVu Sans,{style["font_size"]},&H00FFFFFF,&H00FFFFFF,&H00101321,&H80000000,-1,0,0,0,100,100,0,0,1,4,1,2,90,90,745,1',
@@ -88,8 +88,9 @@ def subtitles(script, style, target, transcript=None):
              '[Events]', 'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text']
     badge_label = clean_subtitle(str(style.get('badge') or 'GTA 6')).upper()
     lines.append(f'Dialogue: 0,0:00:00.00,0:00:03.00,Badge,,0,0,0,,{{\\an8\\pos(540,95)\\fad(100,100)\\1c&H00F4FF&}}★ {badge_label} ★')
-    hook='\\N'.join(textwrap.wrap(clean_subtitle(script.hook),24))
-    lines.append(f'Dialogue: 0,0:00:00.15,0:00:03.00,Header,,0,0,0,,{{\\fad(120,100)}}{hook}')
+    if not styled_hook:
+        hook='\\N'.join(textwrap.wrap(clean_subtitle(script.hook),24))
+        lines.append(f'Dialogue: 0,0:00:00.15,0:00:03.00,Header,,0,0,0,,{{\\fad(120,100)}}{hook}')
     if script.cta:
         cta='\\N'.join(textwrap.wrap(clean_subtitle(script.cta),28))
         lines.append(f'Dialogue: 2,{subtitle_time(max(0,script.duration-3))},{subtitle_time(script.duration)},Header,,0,0,0,,{{\\an5\\pos(540,1350)\\fad(100,100)}}{cta}')
@@ -137,6 +138,10 @@ def render(video, script: Script, attempt=1):
     missing=mandatory_assets(script=script)
     if missing:
         raise MissingAssetsError(missing)
+    from backend.text_styles import active_style, render_hook
+    chosen_text_style=active_style()
+    hook_overlay=(render_hook(script.hook,work/'text-style-hook.png',chosen_text_style)
+                  if chosen_text_style else None)
     audio=narration(script,work,bool(video['test']))
     # Forced word timestamp alignment for real videos (Whisper local).
     # Never label estimated phrase timings as synchronized subtitles.
@@ -157,7 +162,7 @@ def render(video, script: Script, attempt=1):
     if transcript:db.atomic(work/'transcript.json',json.dumps(transcript,ensure_ascii=False))
     visual,visuals=montage(video,script,attempt,work)
     subtitle_file=work/'subtitles.ass'
-    subtitles(script,style,subtitle_file,transcript)
+    subtitles(script,style,subtitle_file,transcript,styled_hook=bool(hook_overlay))
     # Every used third-party clip is attributed visibly at the right timestamp.
     credit_events=[]
     for scene,item in zip(script.scenes,visuals):
@@ -181,6 +186,12 @@ def render(video, script: Script, attempt=1):
     from backend.personas import expression_file
     graph=['[0:v]ass=subtitles.ass[base]']
     current='base'
+    if hook_overlay:
+        # Generated from the live script and licensed inputs, not EPS example text.
+        args+=['-loop','1','-framerate','30','-i',str(hook_overlay)]
+        graph.append('[2:v]format=rgba,fade=t=in:st=0:d=0.16:alpha=1[titlefx]')
+        graph.append("[base][titlefx]overlay=x=0:y=0:enable='between(t,0.10,2.90)'[styledbase]")
+        current='styledbase'
     previous_emotion_by_speaker={}
     timeline_phrases=timeline.get('phrases',[])
     # Use actual TTS speaking boundaries (rather than estimated scene timestamps)
@@ -202,7 +213,7 @@ def render(video, script: Script, attempt=1):
             raise PreflightError(f'Pose obrigatória indisponível para {who}: {exc}') from exc
         previous_emotion_by_speaker[who]=actual
         args+=['-loop','1','-framerate','1','-i',str(avatar)]
-        input_index=idx+2
+        input_index=idx+(3 if hook_overlay else 2)
         graph.append(f'[{input_index}:v]scale=720:850:force_original_aspect_ratio=decrease,format=rgba[avatar{idx}]')
         label=f'overlay{idx}'
         start,end=section['start'],section['end']

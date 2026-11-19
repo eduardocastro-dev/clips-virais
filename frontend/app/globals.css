@@ -94,3 +94,20 @@
 .seo-editor button{font-size:11px;min-height:34px;padding:6px 12px}
 .seo-editor .seo-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px}
 .seo-editor small{white-space:normal;line-height:1.65}
+
+
+/* Dedicated licensed typography and text effects tab. */
+.text-style-library .text-style-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;max-width:930px}
+.text-style-form label{display:flex;flex-direction:column;gap:7px;color:#cad9e6;font-size:12px;min-width:0}
+.text-style-form label:nth-last-of-type(1){grid-column:1/-1}
+.text-style-form textarea,.text-style-form select,.text-style-form input{width:100%;min-width:0;border:1px solid #364b60;border-radius:7px;padding:10px;background:#101f2b;color:#e6edf5}
+.text-style-form button{justify-self:start}
+.text-style-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;margin:12px 0 20px}
+.text-style-card{border:1px solid #31495e;border-radius:10px;padding:12px;background:#0f1c2a;min-width:0}
+.text-style-card h3{font-size:13px;overflow-wrap:anywhere}
+.text-style-card small{margin:8px 0;overflow-wrap:anywhere}
+.text-style-card small svg{display:inline;vertical-align:middle}
+.text-style-card strong.success{display:flex;align-items:center;gap:6px}
+.text-style-preview{display:block;width:100%;height:145px;object-fit:contain;border-radius:7px;background:#233143}
+.empty-preview{display:flex;justify-content:center;align-items:center}
+@media(max-width:650px){.text-style-library .text-style-form{grid-template-columns:1fr}}

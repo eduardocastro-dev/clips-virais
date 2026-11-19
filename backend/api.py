@@ -67,6 +67,53 @@ def state():
         'secrets': [x['key'].removeprefix('secret:') for x in db.rows("SELECT key FROM kv WHERE key LIKE 'secret:%'")]}
 
 
+
+# Licensed typography and EPS/JPG text effects for the video editor.
+@app.get('/api/text-styles', dependencies=protected)
+def get_text_styles():
+    from backend.text_styles import list_styles
+    return list_styles()
+
+
+@app.post('/api/text-styles/upload', dependencies=protected)
+async def upload_text_style(file: UploadFile = File(...), name: str = Form(...),
+                            theme: str = Form('california_sunset'),
+                            source_class: str = Form('THIRD_PARTY'),
+                            evidence: str = Form(...)):
+    from backend.text_styles import import_style, MAX_UPLOAD
+    content = await file.read(MAX_UPLOAD + 1)
+    try:
+        return import_style(name=name, filename=file.filename or '', content=content,
+                            source_class=source_class, evidence=evidence, theme=theme)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+
+
+@app.post('/api/text-styles/deactivate', dependencies=protected)
+def deactivate_text_style():
+    from backend.text_styles import deactivate
+    return deactivate()
+
+
+@app.post('/api/text-styles/{id}/activate', dependencies=protected)
+def activate_text_style(id: str):
+    from backend.text_styles import activate
+    try:
+        return activate(id)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+
+
+@app.get('/api/text-styles/{id}/preview', dependencies=protected)
+def preview_text_style(id: str):
+    from backend.text_styles import preview
+    try:
+        path=preview(id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from None
+    return FileResponse(path, media_type='image/jpeg')
+
+
 @app.delete('/api/opportunities', dependencies=protected)
 def clear_opportunities():
     """Clear the radar only; never delete video productions or monitoring sources."""

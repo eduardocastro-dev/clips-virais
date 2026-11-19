@@ -140,18 +140,25 @@ def prioritized_opportunities(limit=150):
 
 
 def queue_opportunities():
+    config = db.settings()
+    if not config.automatic:
+        return
     for opportunity in prioritized_opportunities(limit=30):
         if db.rows('SELECT id FROM videos WHERE url=:url', {'url':opportunity['url']}):
             continue
         try:
+            if db.production_usage() >= config.daily_limit:
+                break
             if opportunity['platform']=='news':
                 create_video(reference=json.loads(opportunity['metadata']))
             else:
                 recommended=db.get_setting('recommendations', {}).get('template') or 'gta-news'
                 create_video(ImportRequest(url=opportunity['url'],duration=db.settings().duration,template=recommended))
-        except ValueError:
-            # Daily limit applies across all sources; no infinite retries.
+            db.log_event(None, 'worker', 'AUTO_QUEUE', f'Oportunidade enfileirada automaticamente: {opportunity["url"]}')
             break
+        except Exception as exc:
+            logging.error(json.dumps({'error': 'auto_queue_failed', 'message': str(exc)}, ensure_ascii=False))
+            continue
 
 
 def perform(job):

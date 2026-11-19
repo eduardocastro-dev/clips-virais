@@ -19,6 +19,21 @@ Inspecione primeiro os cinco agentes existentes e as fronteiras entre `backend/p
 
 Antes de mudar o comportamento de render, execute o diagnóstico read-only `python -m backend.diagnose_assets --json` dentro do container API, aponte arquivos/cenas com evidências, depois altere uma unidade de comportamento por vez. Ao final, execute os testes Python, o build Next.js/TypeScript e um smoke FFmpeg com mídias próprias; não invente resultados. Todos os arquivos em `/assets/` pertencem ao usuário e devem ser preservados.
 
+## Direção visual — Style Guide e novas skills (Fase 0)
+
+Quando o pedido envolver a identidade visual ou as técnicas de edição do canal, consulte **`style_guide.json` na raiz**, junto com `.agents/skills/analista-de-estilo/SKILL.md` (cópia compatível em `.claude/skills/`). O objetivo é **interpretar a intenção estética**, não copiar os vídeos de referência.
+
+As URLs de 4 Shorts e 3 buscas Envato foram conservadas como inspiração, mas **o conteúdo visual delas não foi verificável online** no momento da configuração. Consequentemente, parâmetros do guia são **padrões criativos sugeridos e identificados como tal**, nunca métricas medidas. Não baixar ou incorporar os vídeos/templates somente por serem referências; nenhuma skill pode pressupor aquisição de licença.
+
+Skills disponíveis para invocação pelo assistente de desenvolvimento:
+- `analista-de-estilo`: atualizar a direção original a partir de referências públicas, mantendo proveniência explícita;
+- `transcricao-whisperx`: orientar alinhamento de palavras; WhisperX é opcional, não instalado por esta skill;
+- `animacao-hyperframes`: planejar e implementar motion determinístico; HyperFrames CLI é opcional, não instalado por esta skill;
+- `sonorizacao-epidemic`: planejar SFX/licenças; nenhuma música Epidemic está licenciada ou baixada por esta skill;
+- `revisao-premiere`: checklist de revisão; não pressupor Premiere Pro instalado no Docker ou na estação do usuário.
+
+A instalação dessas skills **não adiciona agentes em execução nem modifica o worker**. Todo efeito ou layout novo precisa constar no `style_guide.json` antes da implementação, respeitar duração real do Piper e as validações existentes de direitos dos assets. Nenhuma destas skills autoriza enfraquecer preflight, eliminar áudio real ou inserir SFX sem licença.
+
 ## Skills profissionais do estúdio de vídeo
 
 O estúdio conta com skills especializadas instaladas em `.agents/skills/` e `.claude/skills/`:

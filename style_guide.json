@@ -1,0 +1,311 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "guide_id": "gta-studio-neon-broadcast",
+  "version": "1.0.0",
+  "status": "CREATIVE_DIRECTION_PROPOSED",
+  "language": "pt-BR",
+  "purpose": "Fonte unica de verdade para escolhas de estilo dos agentes especializados; NAO um laudo de medicao dos links.",
+  "provenance": {
+    "method": "briefing criativo do usuario + leitura da configuracao atual do GTA Studio + pesquisa publica sobre ferramentas",
+    "video_files_downloaded": 0,
+    "reference_videos_measured": 0,
+    "visual_content_of_provided_urls_verified": false,
+    "rule_frequency_3plus_verified": false,
+    "numeric_parameter_status": "defaults_criativos_propostos_nao_medidos",
+    "do_not_claim_observed_metrics": true
+  },
+  "reference_links": {
+    "youtube_shorts": [
+      {
+        "url": "https://www.youtube.com/shorts/4UwvtMF9FXg",
+        "role": "inspiracao",
+        "status": "conteudo_nao_verificado_online",
+        "media_download_allowed": false
+      },
+      {
+        "url": "https://www.youtube.com/shorts/KtZG5auAwiY",
+        "role": "inspiracao",
+        "status": "conteudo_nao_verificado_online",
+        "media_download_allowed": false
+      },
+      {
+        "url": "https://www.youtube.com/shorts/qj2QyyPIMX4",
+        "role": "inspiracao",
+        "status": "conteudo_nao_verificado_online",
+        "media_download_allowed": false
+      },
+      {
+        "url": "https://www.youtube.com/shorts/FdIS2AC9oJA",
+        "role": "inspiracao",
+        "status": "conteudo_nao_verificado_online",
+        "media_download_allowed": false
+      }
+    ],
+    "envato_templates": [
+      {
+        "url": "https://app.envato.com/search/video-templates/890cfb04-77ea-445a-a18d-e604909bf3ec",
+        "role": "inspiracao_de_motion_design",
+        "status": "pagina_de_busca_nao_inspecionavel",
+        "template_asset_selected": false,
+        "license_evidence_required_before_use": true
+      },
+      {
+        "url": "https://app.envato.com/search/video-templates/4536fdda-954a-42f5-b74a-dbc325cfd81d",
+        "role": "inspiracao_de_motion_design",
+        "status": "pagina_de_busca_nao_inspecionavel",
+        "template_asset_selected": false,
+        "license_evidence_required_before_use": true
+      },
+      {
+        "url": "https://app.envato.com/search/video-templates/0d207aa6-dfe7-4c58-932e-8ed7b2997f75",
+        "role": "inspiracao_de_motion_design",
+        "status": "pagina_de_busca_nao_inspecionavel",
+        "template_asset_selected": false,
+        "license_evidence_required_before_use": true
+      }
+    ]
+  },
+  "identity": {
+    "name": "GTA Studio / Neon Gaming Broadcast",
+    "art_direction": [
+      "high-energy gaming news",
+      "narrativa rapida mas compreensivel",
+      "impacto visual sem poluicao",
+      "atmosfera urbana neon original",
+      "revelacoes pontuais",
+      "personas originais"
+    ],
+    "must_not_copy_specific_edit_or_brand_assets": true,
+    "priority": "clareza da noticia > personalidade > motion effects"
+  },
+  "canvas": {
+    "aspect_ratio": "9:16",
+    "resolution_px": {
+      "width": 1080,
+      "height": 1920
+    },
+    "fps": 30,
+    "duration_rule": "A duracao e o alinhamento das cenas dependem do audio real Piper + ffprobe, nunca do preset de motion.",
+    "safe_zones_px": {
+      "top": 210,
+      "bottom": 340,
+      "left": 80,
+      "right": 80
+    },
+    "min_text_contrast_ratio": 4.5
+  },
+  "palette": {
+    "background": "#101827",
+    "background_secondary": "#20162E",
+    "text": "#F8FAFC",
+    "cyan": "#22D3EE",
+    "violet": "#8B5CF6",
+    "mint": "#5EEAD4",
+    "alert": "#EF4444",
+    "highlight": "#FDE047",
+    "source": "azul/ciano/violeta e tons ja presentes em templates/catalog.json; cores adicionais sao proposta criativa"
+  },
+  "typography": {
+    "fallback_font": "DejaVu Sans",
+    "heading_style": "bold_uppercase",
+    "caption_weight": 700,
+    "caption_font_size_px": 64,
+    "caption_outline_px": 5,
+    "caption_shadow_opacity": 0.75,
+    "caption_words_per_group": 4,
+    "max_caption_lines": 2,
+    "caption_center_y_px": 1390,
+    "caption_highlight_scale": 1.12,
+    "require_word_level_timestamp_for_word_level_motion": true,
+    "no_word_timestamp_fallback": "usar legendas por frase sem fingir sincronismo preciso"
+  },
+  "editing": {
+    "hook_window_seconds": 3,
+    "shot_duration_target_seconds": 2.25,
+    "shot_duration_allowed_seconds": [
+      1.5,
+      3
+    ],
+    "allowed_deviation_from_creative_target_pct": 15,
+    "camera": [
+      {
+        "name": "push_in",
+        "scale": [
+          1,
+          1.1
+        ],
+        "duration_ms": 850
+      },
+      {
+        "name": "pull_out",
+        "scale": [
+          1.08,
+          1
+        ],
+        "duration_ms": 950
+      },
+      {
+        "name": "drift",
+        "translation_px": [
+          -20,
+          20
+        ],
+        "duration_ms": 1300
+      },
+      {
+        "name": "punch_in",
+        "scale": [
+          1,
+          1.16
+        ],
+        "duration_ms": 230
+      },
+      {
+        "name": "shake",
+        "translation_px": [
+          -7,
+          7
+        ],
+        "duration_ms": 150
+      }
+    ],
+    "max_simultaneous_strong_camera_motion": 1,
+    "layouts": [
+      "fullscreen_gameplay",
+      "split_screen",
+      "news_card",
+      "hero_headline",
+      "lower_third",
+      "persona_overlay"
+    ],
+    "prevent_same_layout_on_adjacent_scenes": true,
+    "select_layout_by_narrative_beat": true
+  },
+  "motion": {
+    "allowed_easing": [
+      "ease-out",
+      "ease-in-out",
+      "cubic-bezier(0.2,0.8,0.2,1)",
+      "linear"
+    ],
+    "animations": [
+      {
+        "element": "caption_word",
+        "type": "pop",
+        "duration_ms": 170,
+        "easing": "ease-out",
+        "sfx": "pop_soft"
+      },
+      {
+        "element": "headline",
+        "type": "slide",
+        "duration_ms": 260,
+        "easing": "cubic-bezier(0.2,0.8,0.2,1)",
+        "sfx": "whoosh_short"
+      },
+      {
+        "element": "highlight",
+        "type": "zoom",
+        "duration_ms": 230,
+        "easing": "ease-out",
+        "sfx": "hit_soft"
+      },
+      {
+        "element": "news_card",
+        "type": "wipe",
+        "duration_ms": 280,
+        "easing": "ease-in-out",
+        "sfx": "whoosh_short"
+      },
+      {
+        "element": "persona_reaction",
+        "type": "pop",
+        "duration_ms": 240,
+        "easing": "ease-out",
+        "sfx": "none"
+      },
+      {
+        "element": "scene_transition",
+        "type": "slide",
+        "duration_ms": 220,
+        "easing": "ease-in-out",
+        "sfx": "whoosh_short"
+      }
+    ],
+    "stagger_between_caption_words_ms": 0,
+    "allow_glitch_or_morph_only_after_guide_revision": true,
+    "sfx_sync_tolerance_frames": 2,
+    "motion_budget": "Efeitos fortes em destaques, nunca em toda frase."
+  },
+  "audio": {
+    "target_integrated_lufs": -14,
+    "allowed_integrated_lufs_deviation": 1,
+    "audio_priority": [
+      "voice",
+      "sfx",
+      "music"
+    ],
+    "music_ducking_under_speech": true,
+    "sfx_buses": [
+      "pop_soft",
+      "whoosh_short",
+      "hit_soft",
+      "riser_short"
+    ],
+    "bpm": "track_dependent_not_measured",
+    "must_attach_track_id_and_license_evidence": true,
+    "epidemic_sound_free_api_not_commercially_licensed": true,
+    "no_unlicensed_sfx_fallback": true
+  },
+  "story": {
+    "hook_window_seconds": 3,
+    "reveal_or_turning_point": "onde a fonte sustenta uma mudanca real de contexto",
+    "cta_final": "pergunta pertinente e objetiva",
+    "no_false_urgency": true,
+    "no_fabricated_news": true,
+    "editorial_modes": [
+      {
+        "id": "radar_gta",
+        "goal": "noticia objetiva e ritmo agudo"
+      },
+      {
+        "id": "gta_em_detalhes",
+        "goal": "contexto, destaques visuais e comparacoes"
+      },
+      {
+        "id": "vice_city_talk",
+        "goal": "comentario original com persona e humor moderado"
+      }
+    ]
+  },
+  "toolchain": {
+    "transcription": {
+      "preferred": "WhisperX para forced alignment quando disponivel",
+      "existing_fallback": "backend/transcription.py (faster-whisper)",
+      "never_claim_forced_alignment_when_missing": true
+    },
+    "animation": {
+      "preferred": "HyperFrames (opcional)",
+      "fallback": "FFmpeg/compositor existente",
+      "must_not_replace_render_engine_implicitly": true
+    },
+    "sound": {
+      "preferred": "Epidemic Sound somente com licenca compativel",
+      "fallback": "biblioteca local ja validada pelo studio"
+    },
+    "review": {
+      "preferred": "Premiere Pro para revisao manual quando instalado",
+      "fallback": "preflight deterministico FFmpeg/ffprobe existente"
+    }
+  },
+  "guardrails": {
+    "do_not_download_reference_media": true,
+    "do_not_auto_use_envato_search_result_as_asset": true,
+    "style_choices_must_exist_in_this_guide": true,
+    "no_edits_to_piper_duration_validation": true,
+    "no_edits_to_rights_validation": true,
+    "license_required_for_every_render_asset": true,
+    "existing_pipeline_must_remain_functional": true,
+    "no_premiere_assumed_in_docker": true
+  }
+}

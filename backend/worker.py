@@ -227,15 +227,20 @@ def tick():
     except PipelineInterrupted:
         db.execute("UPDATE jobs SET status='DONE',lease=NULL,error=NULL WHERE id=:id",{'id':job['id']})
     except Exception as exc:
-        message = str(exc)[:500] if isinstance(exc, (IntegrationError, ValueError)) else 'Erro interno; consulte o log local.'
+        message = str(exc)[:500] if isinstance(exc, (IntegrationError, ValueError)) else 'Erro interno no pipeline; reencaminhado para nova tentativa.'
         attempts = job['attempts'] + 1
-        failed = attempts >= 3
+        failed = attempts >= 5
         db.execute('UPDATE jobs SET status=:status,due=:due,lease=NULL,error=:error WHERE id=:id',
-                   dict(id=job['id'], status='FAILED' if failed else 'QUEUED', due=time.time()+min(1800, 30*2**attempts), error=message))
+                   dict(id=job['id'], status='FAILED' if failed else 'QUEUED', due=time.time()+min(1800, 15*2**attempts), error=message))
         if job['video_id']:
-            db.execute("UPDATE videos SET status=:status,error=:error,updated=:now WHERE id=:id AND manual_decision IS NULL",
-                       dict(id=job['video_id'], status='FAILED' if failed else 'RETRY', error=message, now=time.time()))
-            db.log_event(job['video_id'], 'worker', 'ERROR', message)
+            if failed:
+                db.execute("UPDATE videos SET status=:status,error=:error,updated=:now WHERE id=:id AND manual_decision IS NULL",
+                           dict(id=job['video_id'], status='REJECTED', error=message, now=time.time()))
+                db.log_event(job['video_id'], 'worker', 'REJECTED', f'Vídeo descartado após {attempts} tentativas falhadas: {message}')
+            else:
+                db.execute("UPDATE videos SET status=:status,error=:error,updated=:now WHERE id=:id AND manual_decision IS NULL",
+                           dict(id=job['video_id'], status='RETRY', error=message, now=time.time()))
+                db.log_event(job['video_id'], 'worker', 'RETRY', f'Tentativa {attempts} falhou; nova tentativa agendada: {message}')
         if job['kind'].startswith('profile:'):
             db.execute('UPDATE profiles SET error=:error WHERE id=:id', dict(id=job['kind'].split(':')[1], error=message))
         if job['kind'].startswith('source:'):

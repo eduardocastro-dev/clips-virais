@@ -2,198 +2,205 @@
   "personagem": "caio_rivas",
   "width": 1024,
   "height": 1536,
+  "quality": "creator_supplied_sheet_derived",
+  "source_format": "4x6 sheet cropped and resized with alpha-aware Lanczos",
+  "source_cell_px": [
+    256,
+    256
+  ],
+  "note": "Poses derivadas das folhas enviadas pelo usuário. Dimensões 1024x1536 de saída não equivalem a detalhes nativos 1024x1536.",
   "images": [
     {
       "index": 1,
       "emotion": "neutro",
-      "file": "01_neutro.png",
       "description": "neutro",
+      "file": "01_neutro.png",
       "active": true,
-      "sha256": "f72a2e4e2945488cbeafc6d3aaff25eb8b4caf52d2f0d1f28951024b8f88f95c"
+      "sha256": "331814d61c97ef8db275aa2cf3558be3a67623bbd95dbdeb5a9e81d146aae4b5"
     },
     {
       "index": 2,
       "emotion": "feliz",
-      "file": "02_feliz.png",
       "description": "feliz",
+      "file": "02_feliz.png",
       "active": true,
-      "sha256": "625820aa20e2132cfa7844d879049661e5e1cb28bc3e03e2849609d895ffe458"
+      "sha256": "1bd5d9712e0c4caef21a39188e029b9682bbf0523a6e560157ed8ebaeb03b081"
     },
     {
       "index": 3,
       "emotion": "rindo",
-      "file": "03_rindo.png",
       "description": "rindo",
+      "file": "03_rindo.png",
       "active": true,
-      "sha256": "3cbd2c2bf05c96d3a81278a9801b0933b4a3f2f7b0b7f81dde1d16b8263f6d3b"
+      "sha256": "b65556e87c45386dbf52c2332741c25cfbc7ab449aa2402ac187c3aa7e82ca2b"
     },
     {
       "index": 4,
       "emotion": "empolgado",
-      "file": "04_empolgado.png",
       "description": "empolgado",
+      "file": "04_empolgado.png",
       "active": true,
-      "sha256": "d11bd713887719ca48656b6daa982e92789356775b1a00e474d88779273f3ead"
+      "sha256": "cc4235d2a837f3c0b6051b9d40f066ff08e83f7963a347f46b80fb0a2be8679e"
     },
     {
       "index": 5,
       "emotion": "surpreso",
-      "file": "05_surpreso.png",
       "description": "surpreso",
+      "file": "05_surpreso.png",
       "active": true,
-      "sha256": "08afce71acf6d29673a16560e38d8961fd27f02c654e4168abac3e0053d2d591"
+      "sha256": "9ca455b40066491e2fd6c82051dca2b9f505adf516b51abd4c423ac04f12880f"
     },
     {
       "index": 6,
       "emotion": "chocado",
-      "file": "06_chocado.png",
       "description": "chocado",
+      "file": "06_chocado.png",
       "active": true,
-      "sha256": "551865a786a90a3cdc30dcf29f2714ce40fd73b37ac50a726829aa80d5a96047"
+      "sha256": "59c5d2019a1b5d7a825795a18fba0010e56ae06aced7e8cd13e3b4deba1f7467"
     },
     {
       "index": 7,
       "emotion": "confuso",
-      "file": "07_confuso.png",
       "description": "confuso",
+      "file": "07_confuso.png",
       "active": true,
-      "sha256": "40d2551588952f93793c53dfb5929e0a3a2aef20b6135e82c486519fec369035"
+      "sha256": "984072e27d913446e3bd5641905fe412ee7e3bab5e8ffa3d19804be822bdf248"
     },
     {
       "index": 8,
       "emotion": "pensativo",
-      "file": "08_pensativo.png",
       "description": "pensativo",
+      "file": "08_pensativo.png",
       "active": true,
-      "sha256": "13c2aca76bfae210f15de4f24521dd575add4f7f89d409b1e4791a827adca53c"
+      "sha256": "06413644bb1f946832b60259d1723d3e58069e08b4918adfbe43ee88e623637a"
     },
     {
       "index": 9,
       "emotion": "cetico",
-      "file": "09_cetico.png",
       "description": "cetico",
+      "file": "09_cetico.png",
       "active": true,
-      "sha256": "5853ac9238a32c8f00a3ca6dd92dccdc73ae432dc214df0c973c5c79e1075fe5"
+      "sha256": "63d62b1d24209dd1549f1f1acf46006aa5d1eeef235aee2cf626fd65071d8844"
     },
     {
       "index": 10,
       "emotion": "irritado",
-      "file": "10_irritado.png",
       "description": "irritado",
+      "file": "10_irritado.png",
       "active": true,
-      "sha256": "0599250c55a9091be36f814f9609c82e2f0fe79ba51f4a6262fc8da659c00ec0"
+      "sha256": "1d2ddb40bb08d4488f17a006f000e145aa990dd01b8993725a205449aeac5562"
     },
     {
       "index": 11,
       "emotion": "triste",
-      "file": "11_triste.png",
       "description": "triste",
+      "file": "11_triste.png",
       "active": true,
-      "sha256": "6324da25377ad8e5cb7eaf9fb8f5a239ab07f790a73746c61c68056dae009f09"
+      "sha256": "36ef092c9f110ba95a00cc32cf400cef1fa12feeb4b9f1c95357e4dc8e07977a"
     },
     {
       "index": 12,
       "emotion": "entediado",
-      "file": "12_entediado.png",
       "description": "entediado",
+      "file": "12_entediado.png",
       "active": true,
-      "sha256": "c22537906f0154318d2838294ad99394f449d807f69ca275d68ed25798a25336"
+      "sha256": "6f80382d849e61abb82719cdb39080924e43d1a79a0e640a774c3790a487a25a"
     },
     {
       "index": 13,
       "emotion": "apontando_direita",
-      "file": "13_apontando_direita.png",
       "description": "apontando direita",
+      "file": "13_apontando_direita.png",
       "active": true,
-      "sha256": "7a51f83d579a69b58b5c732b5aa003b5a2333e2aa5ca2ae5dd49d347b65d9b94"
+      "sha256": "8ea0b1a1b4247d5ade0ac70b331c3e7c98fbaddb7d803d2e83898d2f4ccc73ad"
     },
     {
       "index": 14,
       "emotion": "apontando_esquerda",
-      "file": "14_apontando_esquerda.png",
       "description": "apontando esquerda",
+      "file": "14_apontando_esquerda.png",
       "active": true,
-      "sha256": "c618e7832dc744928f46b14769a74b709f160731bab71abcc8a109195b486f91"
+      "sha256": "e63a42272845d26f59cd2fef2b1389145922dca9bade20275ccb136798f34c0d"
     },
     {
       "index": 15,
       "emotion": "apontando_cima",
-      "file": "15_apontando_cima.png",
       "description": "apontando cima",
+      "file": "15_apontando_cima.png",
       "active": true,
-      "sha256": "da23ea9d94860d4245f12b7d42ff4d21792bda100a2a833278fb5062cb3f99e8"
+      "sha256": "29cb1ce410bd25ba72c6541ab862105439ef359e94602b9b6f68467549c4d689"
     },
     {
       "index": 16,
       "emotion": "joinha",
-      "file": "16_joinha.png",
       "description": "joinha",
+      "file": "16_joinha.png",
       "active": true,
-      "sha256": "a746cbf5ea1ae499b9e3b8f5f07abf4b6e783a6de8b93b9a7e746d55afcea73c"
+      "sha256": "bbf4fff82c01d56e1294539dab1b87c74d50cf691d38cbc18e292d1793ec2344"
     },
     {
       "index": 17,
       "emotion": "bracos_cruzados",
-      "file": "17_bracos_cruzados.png",
       "description": "bracos cruzados",
+      "file": "17_bracos_cruzados.png",
       "active": true,
-      "sha256": "36d8de35d543b65e3db22c5c58255495cf3f26b13a4a4c53c318e675b8e497dd"
+      "sha256": "d06e933aa9e3acd21cfd2b12f95e166914924d4a87c56fb5efe04537279e97a6"
     },
     {
       "index": 18,
       "emotion": "dando_ombros",
-      "file": "18_dando_ombros.png",
       "description": "dando ombros",
+      "file": "18_dando_ombros.png",
       "active": true,
-      "sha256": "e004e60f6e511f2ba94ca23d6cd4e2fdd7d8ec6271731ffd487b12875a5ab316"
+      "sha256": "7a9dc80b0485aa4a5f0cc9dde610d23383f72a87d7e9f60c2a9ed97dbd3bf8e9"
     },
     {
       "index": 19,
       "emotion": "piscando",
-      "file": "19_piscando.png",
       "description": "piscando",
+      "file": "19_piscando.png",
       "active": true,
-      "sha256": "7dba0d83af960f7b87a1d35dc69d9d041a38021dadd5c890b41cfbf9edea25bb"
+      "sha256": "4baa4c6780932986e4301cc750799ca0328282e898b4714ca679f7a949b91d8d"
     },
     {
       "index": 20,
       "emotion": "sussurrando",
-      "file": "20_sussurrando.png",
       "description": "sussurrando",
+      "file": "20_sussurrando.png",
       "active": true,
-      "sha256": "1395c621e55749833515fe497ec8eae464de4f1a89e1d37d16601709c1d8361e"
+      "sha256": "d04b186be6bb3b22d3faacd2523898ba63c274f40227edeb1a15ffa07b7e09a3"
     },
     {
       "index": 21,
       "emotion": "comemorando",
-      "file": "21_comemorando.png",
       "description": "comemorando",
+      "file": "21_comemorando.png",
       "active": true,
-      "sha256": "423c7f8d946b27a63aafef541c9acf675bf49220aa66a13abcecd1786efa11bc"
+      "sha256": "3c88e6a44dba1ea987f94ca0b8770201c3ed527960304f9009da21a9f56e3942"
     },
     {
       "index": 22,
       "emotion": "ultimo_minuto",
-      "file": "22_ultimo_minuto.png",
       "description": "ultimo minuto",
+      "file": "22_ultimo_minuto.png",
       "active": true,
-      "sha256": "ed5b887676c397d7308ebcb17b3ec86a18bb36acb3506bbaf4b0d0f2e4b24a47"
+      "sha256": "7207c7cd731f27eca4b423b2e4f195e33653679004b220743d02772628a938ea"
     },
     {
       "index": 23,
       "emotion": "acenando",
-      "file": "23_acenando.png",
       "description": "acenando",
+      "file": "23_acenando.png",
       "active": true,
-      "sha256": "98fe71eed60bc3893ca3a214097b9ac84ef53b5c97b9d218cf6fce49724ebcea"
+      "sha256": "49c8220bec7449a230c264ba9b6ca9e3a83827b79d8d566290c2e4e1943b33f3"
     },
     {
       "index": 24,
       "emotion": "chamando_comentar",
-      "file": "24_chamando_comentar.png",
       "description": "chamando comentar",
+      "file": "24_chamando_comentar.png",
       "active": true,
-      "sha256": "02c269105d3244ad7d2bb776103e9f090652a5a16a6934ddfd8229623422a0d8"
+      "sha256": "1d2325e8232cd48e9ebc89331639f32ffc35376a033cff82c04fa3a52525d80c"
     }
   ]
 }

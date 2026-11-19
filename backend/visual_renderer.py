@@ -11,27 +11,65 @@ from backend import core as db
 from backend.integrations import IntegrationError
 
 
-def title_card(text: str, source: str, path: Path):
-    """Locally generated card using short original headline, not an article copy."""
-    from PIL import Image,ImageDraw,ImageFont
-    width,height=850,730
-    image=Image.new('RGBA',(width,height),(12,16,40,246))
-    d=ImageDraw.Draw(image)
-    d.rounded_rectangle((20,20,830,705),radius=32,outline=(255,40,178),width=8)
-    d.rectangle((55,88,795,96),fill=(58,229,232))
+def title_card(text: str, source: str, path: Path, badge: str = 'RADAR GTA 6', accent = (58, 229, 232)):
+    """Locally generated modern editorial card using short original headline."""
+    from PIL import Image, ImageDraw, ImageFont
+    width, height = 860, 680
+    image = Image.new('RGBA', (width, height), (15, 23, 42, 245))
+    d = ImageDraw.Draw(image)
+    d.rounded_rectangle((15, 15, width - 15, height - 15), radius=32, outline=accent, width=6)
+    badge_text = str(badge).upper()[:22]
+    d.rounded_rectangle((50, 45, 290, 95), radius=16, fill=(30, 41, 59, 240), outline=accent, width=2)
     try:
-        font=ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',39)
-        small=ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',23)
+        font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 38)
+        small = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 24)
+        badge_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 22)
     except OSError:
-        font=ImageFont.load_default();small=font
-    d.text((60,45),'GTA 6 BRASIL',font=small,fill='#68e3ff')
-    lines=wrap(str(text)[:180],width=23)[:6]
-    for i,line in enumerate(lines):
-        d.text((59,135+i*75),line,font=font,fill='white',stroke_width=1,stroke_fill='#210a36')
-    d.line((60,605,790,605),fill=(255,43,168),width=5)
-    d.text((60,637),str(source)[:58],font=small,fill='#ccbbdd')
+        font = ImageFont.load_default(); small = font; badge_font = font
+    d.text((68, 57), badge_text, font=badge_font, fill=accent)
+    domain = str(source).split('/')[0].replace('www.', '')[:35]
+    d.text((315, 60), f"FONTE: {domain}", font=small, fill='#94a3b8')
+    lines = wrap(str(text)[:190], width=25)[:5]
+    for i, line in enumerate(lines):
+        d.text((55, 140 + i * 80), line, font=font, fill='white', stroke_width=1, stroke_fill='#090d16')
+    d.line((50, height - 85, width - 50, height - 85), fill=accent, width=4)
+    d.text((55, height - 60), 'GTA CONTENT STUDIO · REPORTAGEM EXCLUSIVA', font=small, fill='#64748b')
     image.save(path)
     return path
+
+
+def style_screenshot_card(img_path: Path, out_path: Path, source_label: str = '', badge: str = 'FONTE ORIGINAL', accent = (58, 229, 232)):
+    """Styles a raw screenshot or source thumbnail inside a branded broadcast card."""
+    from PIL import Image, ImageDraw, ImageFont
+    width, height = 860, 660
+    card = Image.new('RGBA', (width, height), (15, 23, 42, 245))
+    d = ImageDraw.Draw(card)
+    d.rounded_rectangle((12, 12, width - 12, height - 12), radius=30, outline=accent, width=5)
+    try:
+        small = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf', 23)
+        badge_font = ImageFont.truetype('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf', 21)
+    except OSError:
+        small = ImageFont.load_default(); badge_font = small
+    d.rounded_rectangle((40, 35, 275, 80), radius=14, fill=(30, 41, 59, 240), outline=accent, width=2)
+    d.text((55, 46), str(badge).upper()[:20], font=badge_font, fill=accent)
+    clean_src = (source_label.split('/')[2] if '://' in source_label else source_label).replace('www.', '')[:40]
+    if clean_src:
+        d.text((295, 48), f"REF: {clean_src}", font=small, fill='#94a3b8')
+    try:
+        with Image.open(img_path) as im:
+            im = im.convert('RGBA')
+            target_w, target_h = width - 80, height - 150
+            im.thumbnail((target_w, target_h), Image.Resampling.LANCZOS)
+            mask = Image.new('L', im.size, 0)
+            ImageDraw.Draw(mask).rounded_rectangle((0, 0, im.size[0], im.size[1]), radius=20, fill=255)
+            paste_x = (width - im.size[0]) // 2
+            paste_y = 100 + (target_h - im.size[1]) // 2
+            card.paste(im, (paste_x, paste_y), mask)
+            d.rounded_rectangle((paste_x - 1, paste_y - 1, paste_x + im.size[0] + 1, paste_y + im.size[1] + 1), radius=20, outline=(51, 65, 85, 220), width=2)
+    except Exception:
+        pass
+    card.save(out_path)
+    return out_path
 
 
 def _filtered_base(ff, spec, seconds, path, work, index):
@@ -56,12 +94,20 @@ def _filtered_base(ff, spec, seconds, path, work, index):
         source=url.split('/')[2] if '://' in url else 'Fonte identificada'
         overlay=str(title_card(spec.get('overlay_text','Notícia em análise'),source,work/f'news-{index}.png'))
     elif overlay:
-        overlay=str(db.safe_file(overlay))
+        raw_overlay=db.safe_file(overlay)
+        styled_overlay=work/f'styled-card-{index}.png'
+        label=spec.get('overlay_label') or 'FONTE ORIGINAL'
+        src_url=spec.get('overlay_source') or ''
+        overlay=str(style_screenshot_card(raw_overlay,styled_overlay,src_url,badge='FONTE ORIGINAL' if label!='thumbnail' else 'THUMBNAIL FONTE'))
     if overlay:
         args+=['-loop','1','-framerate','30','-i',overlay]
-        # Show at most four seconds, leaving clean gameplay between excerpts.
-        until=max(.6,min(4.0,seconds-.2))
-        filt=f'[0:v]{visual}[base];[1:v]scale=760:900:force_original_aspect_ratio=decrease,format=rgba,fade=t=in:st=0:d=0.15:alpha=1[card];[base][card]overlay=x=(W-w)/2:y=145+4*sin(2*PI*t/3):enable=\'between(t,0.15,{until:.2f})\'[video]'
+        until=max(.6,min(4.5,seconds-.2))
+        filt=(
+            f'[0:v]{visual}[base];'
+            f'[1:v]scale=840:960:force_original_aspect_ratio=decrease,format=rgba,'
+            f'fade=t=in:st=0:d=0.20:alpha=1,fade=t=out:st={until-0.20:.2f}:d=0.20:alpha=1[card];'
+            f'[base][card]overlay=x=(W-w)/2:y=150+5*sin(2*PI*t/3.5):enable=\'between(t,0.15,{until:.2f})\'[video]'
+        )
         args+=['-filter_complex',filt,'-map','[video]']
     else:
         args+=['-vf',visual]
@@ -75,8 +121,13 @@ def _support_clip(ff,spec,seconds,target):
     path=db.safe_file(spec['source_clip_path'])
     length=float(media.probe(path)['format']['duration'])
     offset=min(max(0,float(spec.get('source_clip_at') or 0)),max(0,length-seconds))
+    credits=(spec.get('credits') or spec.get('source') or '').strip()
+    clean_credit=re.sub(r'[^A-Za-z0-9_.\- /@:]+', ' ', credits)[:45].strip()
+    vf='scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1'
+    if clean_credit:
+        vf+=f",drawtext=text='FONTE: {clean_credit}':x=w-tw-50:y=170:fontcolor=white:fontsize=26:box=1:boxcolor=black@0.7:boxborderw=8"
     media.run([ff,'-y','-ss',str(offset),'-i',str(path),'-t',str(seconds),'-an',
-       '-vf','scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1',
+       '-vf',vf,
        '-r','30','-c:v','libx264','-preset','veryfast','-crf','25','-pix_fmt','yuv420p',
        '-threads','2',str(target)],timeout=260)
 

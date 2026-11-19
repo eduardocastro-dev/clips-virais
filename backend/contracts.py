@@ -131,7 +131,7 @@ class Settings(BaseModel):
     platforms: list[str] = Field(default_factory=lambda: ['youtube', 'tiktok', 'instagram'])
     provider_url: str = 'http://host.docker.internal:11434/v1'
     routes: dict[str, ModelRoute] = Field(default_factory=lambda: {a: ModelRoute() for a in ['diretor', 'cacador', 'escritor', 'redator', 'editor', 'avaliador', 'pessoa']})
-    daily_tokens: int = Field(default=20000, ge=1000, le=1000000)
+    daily_tokens: int = Field(default=999999, ge=1000, le=1000000)
     daily_cost_usd: float = Field(default=1, ge=0, le=100)
     cost_per_million: float = Field(default=0, ge=0, le=1000)
     youtube_auto: bool = False

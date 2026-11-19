@@ -108,7 +108,9 @@ def fit_cuts(script, analysis: dict) -> list[dict]:
     """
     if not analysis:
         return []
-    duration = float(analysis['source_seconds'])
+    # Only the first MAX_SOURCE_SECONDS are analyzed, even when the original
+    # recording is longer. Never select a time beyond inspected footage.
+    duration = min(float(analysis['source_seconds']),MAX_SOURCE_SECONDS)
     cuts = [float(c) for c in analysis.get('scene_cuts_seconds', [])]
     used: list[tuple[float, float]] = []
     decisions = []
@@ -117,7 +119,7 @@ def fit_cuts(script, analysis: dict) -> list[dict]:
         if length > duration:
             raise IntegrationError('A cena é maior que o vídeo de origem.')
         proposed = float(scene.source_start)
-        fits = (0 <= proposed <= duration - length + 0.01 and
+        fits = (0 <= proposed <= min(600.,duration-length) + 0.01 and
                 all(proposed >= e + 0.5 or proposed + length <= s - 0.5 for s, e in used))
         # Pydantic defaults source_start to zero; repeated zeros are not meaningful montage.
         if not fits or (i > 0 and abs(proposed) < 0.01):

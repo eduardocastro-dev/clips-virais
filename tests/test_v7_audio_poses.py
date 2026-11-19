@@ -34,7 +34,7 @@ def test_expression_fallback_no_repetition():
     path,emotion=expression_file('dante_palma','neutro',previous='neutro')
     assert path.is_file() and emotion!='neutro'
     path2,emotion2=expression_file('dante_palma','unknown',previous='feliz')
-    assert path2.is_file() and emotion2=='retrato_qualidade_unico'  # sem fingir 24 poses HD
+    assert path2.is_file() and emotion2=='neutro'  # galeria completa: emoção desconhecida usa pose neutra
 
 
 def test_5_second_budget_schema():

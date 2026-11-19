@@ -186,7 +186,7 @@ def select_visuals(video,script):
         return str(copy_cache[row['id']].relative_to(db.ROOT))
     def words(value):
         return set(re.findall(r'[a-zA-ZÀ-ÿ0-9]{3,}',str(value or '').lower()))
-    article=production_media.capture_article(video) if video.get('platform')=='news' else None
+    article=production_media.capture_article(video) if video.get('platform') in ('news','youtube','tiktok','instagram') and not video.get('test') else None
     screenshots=(article or {}).get('assets',[])
     # Source frames are extracted only from locally available or explicitly
     # licensed footage. A frame is not assigned a semantic score unless vision
@@ -217,7 +217,12 @@ def select_visuals(video,script):
             if pieces and remaining<1.5:
                 pieces[-1]['duration']=round(pieces[-1]['duration']+remaining,3)
                 break
-            take=min(float(db.settings().visual_cut_seconds),remaining)
+            from backend import media
+            try:
+                cut_target = float(media.template(script.template).get('cut_seconds') or db.settings().visual_cut_seconds)
+            except Exception:
+                cut_target = float(db.settings().visual_cut_seconds)
+            take=min(cut_target,remaining)
             pieces.append({'relative_start':round(t,3),'duration':round(take,3)})
             t+=take
         if not pieces:pieces=[{'relative_start':0.,'duration':round(length,3)}]
@@ -258,26 +263,24 @@ def select_visuals(video,script):
                 raise MissingAssetsError(['assets/gameplay/'], 'Nenhum vídeo/imagem licenciado e ativo corresponde à cena '+str(index+1))
             segments.append(seg)
         # Stagger article screenshot/card over some scene segments, never full article mirrors.
-        if video.get('platform')=='news' and segments:
+        if segments:
             chosen=segments[0]
             if screenshots:
                 ranked=sorted(screenshots,key=lambda shot:
                     (-len(scene_tokens & words(shot.get('excerpt',''))),shot['kind']!='headline'))
                 shot=ranked[index%len(ranked)] if len(ranked)>1 else ranked[0]
                 overlap=len(scene_tokens & words(shot.get('excerpt','')))
-                if overlap>=1 or (index==0 and shot['kind']=='headline'):
+                if overlap>=1 or (index==0 and shot['kind'] in ('headline','thumbnail','article-image')):
                     chosen.update({'overlay_path':shot['path'],'overlay_label':shot['kind'],
                                    'overlay_source':shot['source'],'overlay_rights':'REVIEW_REQUIRED',
                                    'visual_relevance':None,'visual_relevance_method':'lexical',
                                    'visual_reason':'Trecho da fonte relacionado por palavras; revisão visual recomendada.'})
-            elif index==0:
+            elif index==0 and video.get('platform') in ('news','youtube','synthetic'):
                 chosen.update({'overlay_label':'headline-card','overlay_text':video.get('title','Notícia em análise'),
                                'overlay_source':video.get('url',''),'overlay_rights':'OWNED_GENERATED'})
         if curated.get(index):
             options=curated[index]
             for segment_index,segment in enumerate(segments):
-                # Keep visual material from the source in at least ~60% of
-                # this scene, but only when the visual model approved it.
                 if segment_index%4==3:continue
                 match=options[segment_index%len(options)]
                 segment.update({'overlay_path':match['path'], 'overlay_label':'source-frame',
@@ -288,12 +291,11 @@ def select_visuals(video,script):
                     'visual_relevance_method':'vision',
                     'visual_reason':match['reason']})
         # One short licensed excerpt may replace the gameplay backing where
-        # a multimodal match actually exists. Hard cap: 5 seconds in total
-        # from third-party footage, with distinct nonzero source offsets.
-        if source_video and curated.get(index) and support_seconds<5 and segments:
-            candidate=curated[index][0]
-            offset=candidate.get('source_timestamp')
-            if offset is not None and float(offset)>0.01:
+        # a multimodal match exists or from keyframe candidates. Hard cap: 5s total.
+        chosen_candidate = curated.get(index, [None])[0] if curated.get(index) else (candidates[index % len(candidates)] if (source_video and candidates) else None)
+        if source_video and chosen_candidate and support_seconds<5 and segments:
+            offset=chosen_candidate.get('source_timestamp')
+            if offset is not None and float(offset)>=0.0:
                 piece=next((x for x in segments if x.get('overlay_path')),segments[0])
                 excerpt=min(float(piece['duration']),4.0,5.0-support_seconds)
                 if excerpt>=1.0 and abs(excerpt-float(piece['duration']))<.01:

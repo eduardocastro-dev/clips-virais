@@ -23,8 +23,8 @@ def migrate(dry_run:bool=True)->dict:
         try:manifest=json.loads(manifest_path.read_text('utf-8'))
         except (OSError,ValueError):
             report[slug]='Invalid manifest; manual review required';continue
-        if manifest.get('quality')=='creator_supplied_high_resolution':
-            report[slug]='High-resolution creator artwork preserved';continue
+        if manifest.get('quality') in ('creator_supplied_high_resolution','creator_supplied_sheet_derived'):
+            report[slug]='Creator artwork preserved (may be sheet-derived)';continue
         # Only archive files that are BYTE-FOR-BYTE identical to the v7 bundle.
         bundled=[p for p in source.glob('*.png') if (folder/p.name).is_file()]
         if not bundled or any((folder/p.name).read_bytes()!=p.read_bytes() for p in bundled):

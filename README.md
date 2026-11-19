@@ -253,3 +253,12 @@ docker compose exec api python -m backend.retry_audio_errors
 ```
 
 Os pesos Piper não acompanham o ZIP. Os 72 PNGs das poses e os manifestos acompanham a atualização. A narração usa duração **real medida** e a margem de cinco segundos é editável em Configurações.
+
+## Elenco — assets de narradores incluídos
+
+Esta distribuição inclui as 24 poses de Dante Palma, Lia Varela e Caio Rivas,
+com manifests e avatares instaláveis no volume `assets/personas/`.
+As poses foram derivadas de folhas 4×6 fornecidas pelo criador, não de artes
+individuais nativas de 1024px. Consulte `docs/ASSETS-NARRADORES.md`.
+Para sincronizar o volume local do Docker: `docker compose exec api python -m backend.persona_assets`.
+

@@ -197,6 +197,44 @@ def capture_article(video) -> dict:
     except Exception as exc:
         result['error']=str(exc)[:500]
         _log(video['id'],'ARTICLE_CAPTURE_FAILED',result['error'])
+    if not result.get('assets'):
+        try:
+            from backend.assets import canonical_id
+            from backend.integrations import request
+            url=video.get('url','')
+            vid=canonical_id(url)
+            if vid:
+                thumb_url=f'https://img.youtube.com/vi/{vid}/maxresdefault.jpg'
+                resp=request('GET',thumb_url,timeout=10)
+                if resp.status_code==404:
+                    resp=request('GET',f'https://img.youtube.com/vi/{vid}/hqdefault.jpg',timeout=10)
+                if resp.status_code==200 and len(resp.content)>1000:
+                    path=folder/'source-thumb.jpg'
+                    path.write_bytes(resp.content)
+                    result['assets'].append({'path':str(path.relative_to(db.ROOT)),
+                        'kind':'thumbnail','excerpt':video.get('title','Thumbnail da fonte original'),
+                        'source':url,'source_class':'THIRD_PARTY','rights_status':'REVIEW_REQUIRED'})
+                    result['status']='CAPTURED'
+            elif url.startswith('https://'):
+                resp=request('GET',url,timeout=10,headers={'User-Agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+                if resp.status_code==200:
+                    og_match=re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',resp.text,re.I)
+                    if not og_match:
+                        og_match=re.search(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']',resp.text,re.I)
+                    if og_match:
+                        img_url=og_match.group(1)
+                        if img_url.startswith('//'):img_url='https:'+img_url
+                        elif img_url.startswith('/'):img_url=urlsplit(url).scheme+'://'+urlsplit(url).netloc+img_url
+                        img_resp=request('GET',img_url,timeout=10)
+                        if img_resp.status_code==200 and len(img_resp.content)>2000:
+                            path=folder/'article-og-image.jpg'
+                            path.write_bytes(img_resp.content)
+                            result['assets'].append({'path':str(path.relative_to(db.ROOT)),
+                                'kind':'article-image','excerpt':video.get('title','Imagem da matéria original'),
+                                'source':url,'source_class':'THIRD_PARTY','rights_status':'REVIEW_REQUIRED'})
+                            result['status']='CAPTURED'
+        except Exception as fallback_exc:
+            _log(video['id'],'SOURCE_FALLBACK_FAILED',str(fallback_exc)[:200])
     db.atomic(cache,json.dumps(result,ensure_ascii=False,indent=2))
     return result
 

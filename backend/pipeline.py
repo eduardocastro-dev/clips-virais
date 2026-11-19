@@ -16,6 +16,43 @@ from backend.integrations import IntegrationError, metadata, viral_score, llm
 AGENTS = ['diretor', 'cacador', 'escritor', 'redator', 'editor', 'avaliador']
 
 
+def director_choose_template(title: str, text: str = '', current_template: str = 'gta-news') -> str:
+    """Intelligent template selection by the Director based on radar content."""
+    content = f"{title} {text}".lower()
+    
+    # 1. Comparison
+    comparison_keywords = ['comparação', 'comparado', 'versus', ' vs ', ' vs.', 'diferença', 'gta 5', 'gta v', 'rdr2', 'red dead', 'vida real', 'miami real']
+    if any(k in content for k in comparison_keywords):
+        return 'gta-comparison'
+    
+    # 2. Theory, leaks, investigative journalism
+    theory_keywords = ['vazamento', 'vazou', 'leak', 'rumor', 'suposto', 'teoria', 'especulaç', 'código', 'investiga', 'apuração', 'bastidor', 'documento secreto', 'insider']
+    if any(k in content for k in theory_keywords):
+        return 'gta-theory'
+    
+    # 3. Facts / Curiosities / Secrets / Easter Eggs
+    facts_keywords = ['fatos', 'curiosidades', 'detalhes', 'segredo', 'easter egg', 'escondido', 'coisas que você não sabia', 'top ', 'motivos', 'mecânicas', 'física', 'descoberta']
+    if any(k in content for k in facts_keywords):
+        return 'gta-facts'
+        
+    # 4. Cinematic / Visual showcase
+    cinematic_keywords = ['gráfico', 'visual', 'cinemat', 'ray tracing', 'iluminação', 'showcase', 'motor gráfico', 'rage engine', 'textura']
+    if any(k in content for k in cinematic_keywords):
+        return 'gta-cinematic'
+        
+    # 5. Reaction / Community debate / Hype
+    reaction_keywords = ['reação', 'reagindo', 'opinião', 'polêmica', 'comunidade', 'fãs', 'hype', 'vale a pena', 'decepcionou', 'adiamento', 'debate', 'revolta']
+    if any(k in content for k in reaction_keywords):
+        return 'gta-reaction'
+        
+    # 6. Official News
+    news_keywords = ['anúncio', 'oficial', 'rockstar games', 'take-two', 'take two', 'data de lançamento', 'lançamento', 'confirmado', 'trailer', 'preço', 'ps5', 'xbox', 'urgente']
+    if any(k in content for k in news_keywords):
+        return 'gta-news'
+        
+    return current_template or 'gta-news'
+
+
 def download_authorized(video):
     """Compatibility wrapper: authorized source goes to /temp, never /videos/raw."""
     return production_media.acquire_source_video(video)
@@ -40,8 +77,9 @@ def create_video(req: ImportRequest | None = None, test=False, reference=None, v
         credits=req.credits if req else '', instructions=req.instructions if req else '', template=req.template if req else 'gta-news',
         duration=req.duration if req else 10, test=int(test), now=time.time())
     if reference:
+        chosen_template = director_choose_template(reference.get('title', ''), reference.get('description', ''))
         params.update(url=reference['url'],platform='news',title=reference['title'],rights='REFERENCE_ONLY',evidence='',
-                      duration=config.duration,template='gta-news',test=0)
+                      duration=config.duration,template=chosen_template,test=0)
     if variant_key:
         params['url'] += '#studio-variant=' + variant_key
     media.template(params['template'])
@@ -143,6 +181,11 @@ def write_script(video, corrections=None):
             db.execute('UPDATE videos SET duration=:duration WHERE id=:id',
                        {'duration':requested_duration,'id':video['id']})
             video['duration']=requested_duration
+        from backend.personas import get_cast
+        from backend.narration_budget import script_budget
+        cast=get_cast()
+        narration_plan=script_budget(requested_duration,db.settings().narration_margin_seconds,cast)
+        local_source_seconds=storyboard.local_source_seconds(db.ROOT,video['id'],video['rights'])
         failures=[]
         script=None
         for repair in range(3):
@@ -153,8 +196,17 @@ def write_script(video, corrections=None):
                     'two_hosts_requested':(int(hashlib.sha256(video['id'].encode()).hexdigest()[:8],16)%3==0 and
                      sum(bool(v.get('production_ready')) for v in __import__('backend.personas',fromlist=['get_cast']).get_cast().values())>=2),
                     'today_sao_paulo':db.today(),'highlight_analysis':clip_analysis,
+                    'narration_word_budget':narration_plan,
+                    'source_video_available':local_source_seconds is not None,
+                    'source_duration_seconds':local_source_seconds,
+                    'source_start_unit':'seconds, not milliseconds or frames',
+                    'source_start_max_seconds':min(600,local_source_seconds) if local_source_seconds is not None else 0,
+                    'allowed_script_music':'none',
                     'instructions':video['instructions'],'duration':requested_duration,
-                    'template':video['template'],'corrections':(corrections or [])+failures,
+                    'template':video['template'],
+                    'editorial_guideline':media.template(video['template']).get('editorial_guideline',''),
+                    'template_badge':media.template(video['template']).get('badge',''),
+                    'corrections':(corrections or [])+failures,
                     'repair_attempt':repair,
                     'constraints':'A pessoa narradora é ficcional, não copie personagens conhecidos. '
                     'Evidências e atribuição verificadas internamente, nunca selos de fato/rumor na tela. Notícias em comentário original. '
@@ -163,10 +215,15 @@ def write_script(video, corrections=None):
                     'Gancho nos primeiros dois segundos; frases de até 14 palavras, 2 a 4 ideias, análise ágil e pergunta final. '
                     'Cada cena precisa marcar speaker dentre available_speakers SOMENTE (não selecione personagens sem arte aprovada). '
                     'Marque emotion nas cenas dentre as 24 poses conhecidas. '
-                    'Narração limitada à duração do template menos a margem configurada, cerca de 2,5 palavras/s. '+
+                    'Narração: cumpra narration_word_budget.total_words_target usando a calibração da voz Piper '
+                    'e reserve 5 segundos (ou a margem configurada) para o encerramento; nunca corte frases no meio. '
+                    'music deve ser exatamente "none": a trilha licenciada é selecionada em etapa separada. '
+                    'source_start é sempre SEGUNDOS dentro do vídeo-fonte local, nunca frames ou ms; '
+                    'exija 0 <= source_start <= min(600, source_duration_seconds - duração da cena). '
+                    'Sem mídia-fonte local, source_start deve ser 0. '+
                     __import__('backend.editorial_style',fromlist=['WRITER_STYLE']).WRITER_STYLE},
                     Script.model_json_schema(),images=vision_frames)
-                normalized,fixes=storyboard.normalize(result,requested_duration,video['template'],video['id'])
+                normalized,fixes=storyboard.normalize(result,requested_duration,video['template'],video['id'],source_seconds=local_source_seconds)
                 script=Script.model_validate(normalized)
                 if fixes:
                     db.atomic(db.ROOT/'handoff'/video['id']/f'briefing-fixes-{repair+1}.json',
@@ -334,8 +391,29 @@ def run_pipeline(video_id):
         return
     stage(video_id, 'diretor')
     config=db.settings()
-    db.artifact(video_id,'diretor',data={'daily_limit':config.daily_limit,
-        'max_review_attempts':config.max_review_attempts},next_agent='cacador')
+    video_meta = {}
+    if video.get('metadata'):
+        try: video_meta = json.loads(video['metadata'])
+        except Exception: pass
+    if not video.get('test'):
+        decided_template = director_choose_template(
+            (video.get('title') or '') + ' ' + (video_meta.get('title') or ''),
+            (video_meta.get('description') or '') + ' ' + (video.get('instructions') or ''),
+            video.get('template') or 'gta-news'
+        )
+        if decided_template != video.get('template'):
+            db.execute('UPDATE videos SET template=:tpl WHERE id=:id', {'tpl': decided_template, 'id': video_id})
+            video['template'] = decided_template
+    template_info = media.template(video['template'])
+    db.artifact(video_id,'diretor',data={
+        'daily_limit':config.daily_limit,
+        'max_review_attempts':config.max_review_attempts,
+        'selected_template': video['template'],
+        'template_name': template_info.get('name', 'GTA Studio'),
+        'badge': template_info.get('badge', 'GTA 6'),
+        'pacing': template_info.get('pacing', 'fast'),
+        'editorial_guideline': template_info.get('editorial_guideline', '')
+    },next_agent='cacador')
     stage(video_id,'cacador')
     if not (db.ROOT/'handoff'/video_id/'cacador.json').exists():
         hunt(video)

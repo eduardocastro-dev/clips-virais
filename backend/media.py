@@ -29,7 +29,7 @@ def binary(name):
     return executable
 
 
-def run(args, timeout=240, cwd=None):
+def run(args, timeout=60, cwd=None):
     try:
         result = subprocess.run(args, capture_output=True, timeout=timeout, cwd=cwd)
     except subprocess.TimeoutExpired:
@@ -84,9 +84,12 @@ def subtitles(script, style, target, transcript=None):
              'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
              f'Style: Default,DejaVu Sans,{style["font_size"]},&H00FFFFFF,&H00FFFFFF,&H00101321,&H80000000,-1,0,0,0,100,100,0,0,1,4,1,2,90,90,745,1',
              'Style: Header,DejaVu Sans,65,&H00FFFFFF,&H00FFFFFF,&H00101321,&H80000000,-1,0,0,0,100,100,0,0,1,3,1,8,90,90,240,1',
+             'Style: Badge,DejaVu Sans,34,&H00FFFFFF,&H00FFFFFF,&H00101321,&H80000000,-1,0,0,0,100,100,0,0,1,2,1,8,90,90,90,1',
              '[Events]', 'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text']
+    badge_label = clean_subtitle(str(style.get('badge') or 'GTA 6')).upper()
+    lines.append(f'Dialogue: 0,0:00:00.00,0:00:03.00,Badge,,0,0,0,,{{\\an8\\pos(540,95)\\fad(100,100)\\1c&H00F4FF&}}★ {badge_label} ★')
     hook='\\N'.join(textwrap.wrap(clean_subtitle(script.hook),24))
-    lines.append(f'Dialogue: 0,0:00:00.00,0:00:03.00,Header,,0,0,0,,{{\\fad(100,100)}}{hook}')
+    lines.append(f'Dialogue: 0,0:00:00.15,0:00:03.00,Header,,0,0,0,,{{\\fad(120,100)}}{hook}')
     if script.cta:
         cta='\\N'.join(textwrap.wrap(clean_subtitle(script.cta),28))
         lines.append(f'Dialogue: 2,{subtitle_time(max(0,script.duration-3))},{subtitle_time(script.duration)},Header,,0,0,0,,{{\\an5\\pos(540,1350)\\fad(100,100)}}{cta}')
@@ -94,7 +97,6 @@ def subtitles(script, style, target, transcript=None):
         text = '\\N'.join(textwrap.wrap(clean_subtitle(scene.text), 24))
         if scene.end>max(3,scene.start):
             lines.append(f'Dialogue: 0,{subtitle_time(max(3,scene.start))},{subtitle_time(scene.end)},Header,,0,0,0,,{{\\fad(150,150)}}{text}')
-        # Narration is rendered per scene; phrase timings derive from its fitted duration.
         if transcript:
             continue
         words = clean_subtitle(scene.narration).split()
@@ -104,14 +106,15 @@ def subtitles(script, style, target, transcript=None):
             end = scene.start + (scene.end - scene.start) * (index + 1) / len(chunks)
             lines.append(f'Dialogue: 1,{subtitle_time(start)},{subtitle_time(end)},Default,,0,0,0,,{{\\fad(70,70)}}{chunk}')
     if transcript and transcript.get('words'):
-        # Real ASR word timestamps. One word at a time with a micro-pop.
-        keywords={'GTA','VI','VICE','CITY','ROCKSTAR','TRAILER','GAMEPLAY','NOVO'}
+        highlight_color = str(style.get('highlight_color') or '&H00F4FF&').replace('&', r'\1c&')
+        if not highlight_color.startswith(r'\1c'): highlight_color = r'\1c' + highlight_color
+        keywords={'GTA','VI','6','VICE','CITY','ROCKSTAR','TRAILER','GAMEPLAY','NOVO','OFICIAL','DATA','MAPA','LUCIA','JASON'}
         for item in transcript['words']:
             token=clean_subtitle(str(item.get('text','')).strip())
             if not token:continue
-            color=r'\1c&H00F4FF&' if any(x.upper() in keywords for x in re.findall(r'[A-Za-zÀ-ÿ]+',token)) else ''
+            color=highlight_color if any(x.upper() in keywords for x in re.findall(r'[A-Za-zÀ-ÿ0-9]+',token)) else ''
             start=float(item['start']);end=max(start+.06,float(item['end']))
-            effect=r'\fscx112\fscy112\fad(40,60)'+color
+            effect=r'\fscx114\fscy114\fad(40,60)'+color
             lines.append(f'Dialogue: 1,{subtitle_time(start)},{subtitle_time(end)},Default,,0,0,0,,{{{effect}}}{token}')
     target.write_text('\n'.join(lines), encoding='utf-8')
 

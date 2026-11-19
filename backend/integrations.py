@@ -20,7 +20,7 @@ class IntegrationError(RuntimeError):
 def request(method, url, **kwargs):
     # Do not propagate exception URLs: provider query parameters can contain secrets.
     try:
-        with httpx.Client(timeout=40, follow_redirects=False) as client:
+        with httpx.Client(timeout=60, follow_redirects=False) as client:
             response = client.request(method, url, **kwargs)
         if response.status_code >= 400:
             raise IntegrationError(f'Integração respondeu HTTP {response.status_code}.')
@@ -213,7 +213,7 @@ def public_youtube_videos(profile=None):
     """
     if profile and profile['platform'] != 'youtube':
         raise IntegrationError('Consulta pública de vídeos disponível para perfis YouTube.')
-    target = (profile['url'].rstrip('/') + '/videos') if profile else 'ytsearchdate40:GTA 6 gameplay trailer curiosidades Rockstar'
+    target = (profile['url'].rstrip('/') + '/videos') if profile else 'ytsearch:GTA 6 gameplay trailer curiosidades Rockstar sort=upload_date'
     try:
         from yt_dlp import YoutubeDL
         with YoutubeDL({'quiet': True, 'no_warnings': True, 'skip_download': True,
@@ -343,7 +343,30 @@ def llm(agent, video_id, payload, output_schema, images=None):
             r = request('POST', config.provider_url + '/chat/completions', headers=headers, json={
                 'model': model, 'messages': [{'role': 'system', 'content': system}, {'role': 'user', 'content': content}],
                 'max_tokens': route.max_tokens, 'temperature': .3, 'response_format': {'type': 'json_object'}}).json()
-            result = json.loads(r['choices'][0]['message']['content'])
+            resp_content = r['choices'][0]['message']['content']
+            if isinstance(resp_content, str):
+                cleaned = resp_content.strip()
+                if '```json' in cleaned:
+                    parts = cleaned.split('```json')
+                    if len(parts) > 1:
+                        cleaned = parts[1].split('```')[0].strip()
+                elif '```' in cleaned:
+                    parts = cleaned.split('```')
+                    if len(parts) > 1:
+                        cleaned = parts[1].split('```')[0].strip()
+                
+                try:
+                    result = json.loads(cleaned)
+                except json.JSONDecodeError:
+                    # Tenta extrair a primeira chave {...} ou [...] usando regex
+                    import re
+                    match = re.search(r'(\{.*\}|\[.*\])', cleaned, re.DOTALL)
+                    if match:
+                        result = json.loads(match.group(1))
+                    else:
+                        raise
+            else:
+                result = resp_content
             used = r.get('usage', {}).get('total_tokens')
             reconcile(used if isinstance(used, int) and used >= 0 else None)
             db.log_event(video_id, agent, 'MODEL', 'Resposta estruturada recebida; consumo conciliado quando informado.', used or 0)

@@ -1,4 +1,4 @@
-"""Original fictional hosts; artwork is only attached after the user chooses a persona."""
+"""Independent original hosts with bundled assets and per-persona TTS settings."""
 from backend import core as db
 import os
 import json
@@ -75,32 +75,25 @@ def get_cast():
         for key,voice in VOICE_MODELS.items():
             global_settings.setdefault(key,{})['voice_model']=voice
         db.put_setting('cast',global_settings)
-    # First boot: copy supplied original reference art into bind-mounted /assets,
-    # without overwriting art the creator has added or modified.
-    templates=Path(__file__).resolve().parent.parent/'templates'/'personas'
-    # Never seed the old simplified v7 avatar.png artwork.
-    # High-resolution original bust (not an enlarged 256px sprite). User art
-    # takes precedence; never overwrite an existing file in the bind mount.
-    portrait=db.ROOT/'assets'/'personas'/'dante_palma'/'portrait-quality.png'
-    portrait_source=templates/'dante_palma'/'portrait-quality.png'
-    if not portrait.exists() and portrait_source.is_file():
-        portrait.parent.mkdir(parents=True,exist_ok=True)
-        shutil.copy2(portrait_source,portrait)
+    # Ensure all three narrators are installed into the persistent /assets mount.
+    # Existing complete galleries are preserved; incomplete/legacy galleries are backed up.
+    from backend.persona_assets import install_bundled_personas
+    install_bundled_personas()
     result={}
     for key in ('dante_palma','lia_varela','caio_rivas'):
         original=PRESETS[key]
-        # V8 does not seed SVG sprites into production. Creator artwork is imported explicitly.
+        # Bundled pose sheets are separated into RGBA PNGs; creator overrides remain supported.
         override=global_settings.get(key,{})
-        # Default portraits are generated assets bundled with the project.
+        # Default portraits are bundled, creator-supplied art for this project.
         auto=f'assets/personas/{key}/avatar.png'
         high_quality=f'assets/personas/{key}/portrait-quality.png'
         avatar=override.get('image_path') or (high_quality if (db.ROOT/high_quality).is_file() else auto if (db.ROOT/auto).is_file() else '')
         manifest=db.ROOT/'assets'/'personas'/key/'expressions'/'manifest.json'
         try:
-            production_quality=json.loads(manifest.read_text('utf-8')).get('quality')=='creator_supplied_high_resolution'
+            production_quality=json.loads(manifest.read_text('utf-8')).get('quality') in ('creator_supplied_high_resolution','creator_supplied_sheet_derived')
         except (OSError,ValueError):production_quality=False
         production_ready=production_quality or (key=='dante_palma' and (db.ROOT/high_quality).is_file())
-        if not production_ready:avatar=''  # don't show v7 SVG placeholder as cast reference
+        if not production_ready:avatar=''  # never show an old v7 SVG placeholder as final art
         voice=override.get('voice_model') or VOICE_MODELS[key]
         result[key]={**original, **{k:v for k,v in override.items() if k in (
             'name','look','personality','voice','voice_model','speed','opening','closing','image_path','catchphrases','never')},
@@ -138,7 +131,7 @@ def expression_file(speaker: str, emotion: str, previous: str | None = None) -> 
     entries={entry['emotion']:entry for entry in manifest['images'] if entry.get('active',True)}
     if emotion not in entries or emotion==previous:
         emotion='neutro' if previous!='neutro' else 'feliz'
-    quality=manifest.get('quality')=='creator_supplied_high_resolution'
+    quality=manifest.get('quality') in ('creator_supplied_high_resolution','creator_supplied_sheet_derived')
     if not quality:
         portrait=db.ROOT/'assets'/'personas'/speaker/'portrait-quality.png'
         if speaker=='dante_palma' and portrait.is_file():

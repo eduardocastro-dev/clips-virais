@@ -19,6 +19,6 @@ FROM runtime AS test
 USER root
 RUN pip install --no-cache-dir pytest==8.4.2
 COPY tests /app/tests
-COPY scripts/setup_stack.py /app/scripts/setup_stack.py
+COPY scripts /app/scripts
 USER studio
 CMD ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider"]

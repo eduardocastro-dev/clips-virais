@@ -62,8 +62,40 @@ def state():
         'cast': __import__('backend.personas',fromlist=['get_cast']).get_cast(),
         'recommendations':db.get_setting('recommendations',{}),
         'worker_online': time.time() - db.get_setting('worker_heartbeat', 0) < 120,
+        'scheduler_status': db.get_setting('scheduler_status', 'Ainda sem diagnóstico do agendador.'),
         'agents': AGENTS, 'templates': template_list(), 'daily_production_usage': db.production_usage(),
         'secrets': [x['key'].removeprefix('secret:') for x in db.rows("SELECT key FROM kv WHERE key LIKE 'secret:%'")]}
+
+
+@app.delete('/api/opportunities', dependencies=protected)
+def clear_opportunities():
+    """Clear the radar only; never delete video productions or monitoring sources."""
+    count = db.execute('DELETE FROM opportunities')
+    return {'deleted': count}
+
+
+@app.delete('/api/publications/{id}', dependencies=protected)
+def delete_publication(id: str):
+    """Remove one editorial queue entry; preserve published history and video files."""
+    with db.transaction() as connection:
+        publication = connection.execute(__import__('sqlalchemy').text(
+            'SELECT id,status FROM publications WHERE id=:id'), {'id': id}).mappings().first()
+        if not publication:
+            raise HTTPException(404, 'Publicação não encontrada.')
+        if publication['status'] == 'PUBLICADO':
+            raise HTTPException(409, 'Publicação já confirmada. O histórico publicado deve ser preservado.')
+        connection.execute(__import__('sqlalchemy').text(
+            'DELETE FROM metrics WHERE publication_id=:id'), {'id': id})
+        connection.execute(__import__('sqlalchemy').text(
+            'DELETE FROM publications WHERE id=:id'), {'id': id})
+    return {'deleted': True}
+
+
+@app.delete('/api/jobs/completed', dependencies=protected)
+def clear_completed_jobs():
+    """Clear only terminal job history; leave active/retriable work intact."""
+    deleted = db.execute("DELETE FROM jobs WHERE status IN ('DONE','FAILED')")
+    return {'deleted': deleted}
 
 
 @app.post('/api/assets/rescan', dependencies=protected)
@@ -422,50 +454,11 @@ def export_metadata(video_id: str, platform: str):
     return FileResponse(file, media_type='application/json', filename=f'{platform}_{video_id}.json')
 
 
-@app.post('/api/videos/clear', dependencies=protected)
-def clear_videos():
-    videos = db.rows('SELECT id, final_path FROM videos WHERE status IN (\'APPROVED\', \'REJECTED\', \'FAILED\', \'DISCARDED\', \'DONE\')')
-    count = 0
-    for v in videos:
-        video_id = v['id']
-        try:
-            from backend.production_media import remove_workspace
-            remove_workspace(video_id)
-        except Exception:
-            pass
-        if v['final_path']:
-            try:
-                fp = db.safe_file(v['final_path'])
-                if fp.exists():
-                    fp.unlink()
-            except Exception:
-                pass
-        db.execute('DELETE FROM videos WHERE id=:id', {'id': video_id})
-        count += 1
-    return {'cleared': count}
-
-
-@app.post('/api/publications/clear', dependencies=protected)
-def clear_publications():
-    pubs = db.rows('SELECT id, video_id, output_path FROM publications')
-    count = 0
-    for p in pubs:
-        if p['video_id']:
-            try:
-                from backend.production_media import remove_workspace
-                remove_workspace(p['video_id'])
-            except Exception:
-                pass
-        if p['output_path']:
-            try:
-                op = db.safe_file(p['output_path'])
-                if op.exists():
-                    op.unlink()
-            except Exception:
-                pass
-        db.execute('DELETE FROM publications WHERE id=:id', {'id': p['id']})
-        count += 1
-    return {'cleared': count}
+@app.get('/api/handoffs/{video_id}', dependencies=protected)
+def handoffs(video_id: str):
+    if not db.rows('SELECT id FROM videos WHERE id=:id', {'id': video_id}):
+        raise HTTPException(404, 'Vídeo não encontrado.')
+    return {p.name: json.loads(p.read_text('utf-8')) for p in (db.ROOT / 'handoff' / video_id).glob('*.json')}
 
 
 @app.get('/api/report', dependencies=protected, response_class=PlainTextResponse)

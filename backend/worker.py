@@ -94,6 +94,7 @@ def scheduler():
     config = db.settings()
     now = time.time()
     if config.emergency_stop:
+        db.put_setting('scheduler_status', 'Parada de emergência ativa.')
         return
     # Lightweight polling watcher works for bind-mounted /assets on Windows,
     # where inotify events are not reliable across Docker Desktop volumes.
@@ -111,10 +112,21 @@ def scheduler():
         db.enqueue('maintenance', unique_key=f'maintenance:{int(now // 3600)}')
         db.put_setting('maintenance', now)
     if not config.automatic:
+        db.put_setting('scheduler_status', 'Modo automático desligado.')
         return
     if shutil.disk_usage(db.ROOT).free < 2 * 1024**3:
+        db.put_setting('scheduler_status', 'Produção bloqueada: menos de 2 GB livres no volume do Studio.')
         db.notify('disk:' + db.today(), 'Produção interrompida: menos de 2 GB livres.')
         return
+    if db.production_usage() >= config.daily_limit:
+        db.put_setting('scheduler_status', 'Limite diário de produções ativas/aprovadas atingido.')
+    else:
+        db.put_setting('scheduler_status', 'Modo automático ativo; aguardando ou processando oportunidades.')
+    # Discovery may have succeeded without creating a video (or a previous
+    # queue insertion may have failed). Retry existing candidates periodically.
+    if now - db.get_setting('last_auto_queue', 0) >= 60:
+        db.put_setting('last_auto_queue', now)
+        queue_opportunities()
     last = db.get_setting('last_search', 0)
     if now - last >= config.search_minutes * 60:
         db.enqueue('discover', unique_key=f'discover:{int(now // (config.search_minutes * 60))}')
@@ -157,7 +169,9 @@ def queue_opportunities():
             db.log_event(None, 'worker', 'AUTO_QUEUE', f'Oportunidade enfileirada automaticamente: {opportunity["url"]}')
             break
         except Exception as exc:
-            logging.error(json.dumps({'error': 'auto_queue_failed', 'message': str(exc)}, ensure_ascii=False))
+            message = str(exc)[:350]
+            db.put_setting('scheduler_status', 'Falha ao enfileirar oportunidade: ' + message)
+            logging.error(json.dumps({'error': 'auto_queue_failed', 'message': message}, ensure_ascii=False))
             continue
 
 
@@ -214,8 +228,14 @@ def perform(job):
 
 def tick():
     db.put_setting('worker_heartbeat', time.time())
-    scheduler()
+    try:
+        scheduler()
+    except Exception as exc:
+        message = f'Falha no agendador: {type(exc).__name__}: {exc}'[:350]
+        db.put_setting('scheduler_status', message)
+        logging.exception('Falha no agendador; o processamento da fila continuará.')
     if db.settings().emergency_stop:
+        db.put_setting('scheduler_status', 'Parada de emergência ativa.')
         return False
     job = db.claim('worker')
     if not job:

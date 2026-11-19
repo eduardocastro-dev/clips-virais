@@ -231,8 +231,7 @@ def _remove_function_words(words: list[str], remove_count: int) -> list[str]:
     removed=0
     result=[]
     for word in words:
-        lower=word.lower().rstrip(',.;:!?
-')
+        lower=word.lower().rstrip(',.;:!?\n')
         if removed < remove_count and any(lower in group for group in function_words.values()):
             removed+=1
             continue

@@ -195,8 +195,18 @@ def render(video, script: Script, attempt=1):
         from backend.source_preview import ensure
         if ensure(video):
             missing.remove('assets/gameplay/')
+    if scenario:
+        # Missing the operator's nine-template ZIP is a missing prerequisite,
+        # not a transient editor failure. Pause before costly TTS/FFmpeg/LLM
+        # work and allow the operator to upload the real licensed package.
+        from backend.template_pack import selected
+        if not selected(script.template):
+            missing.append('assets/gta_studio_templates.zip')
     if missing:
-        raise MissingAssetsError(missing)
+        detail=('Envie gta_studio_templates.zip em Configurações > Templates '
+                'ou copie para assets/gta_studio_templates.zip.'
+                if 'assets/gta_studio_templates.zip' in missing else '')
+        raise MissingAssetsError(missing,detail=detail)
     from backend.text_styles import active_style, render_hook
     chosen_text_style=active_style()
     hook_overlay=(render_hook(script.hook,work/'text-style-hook.png',chosen_text_style)

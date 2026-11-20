@@ -23,6 +23,11 @@ from backend import media
 INTRO_SKIP_SECONDS = 5 * 60
 SELECTION_POLICY_VERSION = 2
 MIN_SEPARATION_SECONDS = 90
+# At most 12 × 120 seconds of a multi-hour VOD enter WhisperX. Audio-level
+# analysis still observes the entire stream; excerpts cover its whole timeline.
+MAX_ANALYSIS_WINDOWS = 12
+ANALYSIS_WINDOW_SECONDS = 120
+TRANSCRIPTION_SAMPLING_VERSION = 1
 
 
 def _run(args, timeout):
@@ -72,12 +77,120 @@ def _volume_levels(path: Path, folder: Path):
     return levels,wav
 
 
-def _whisperx_words(path: Path, folder: Path):
-    """WhisperX forced alignment is mandatory for automated clip acceptance."""
+def _analysis_windows(volumes: list[float], duration: float) -> list[tuple[int,int]]:
+    """Sample a bounded amount of speech across the *entire* post-intro VOD.
+
+    Each temporal bin contributes one window, chosen by audible activity among
+    five positions inside that bin. This is candidate *discovery*, not a
+    substitute for scoring or WhisperX word alignment.
+    """
+    available=max(0.0,float(duration)-INTRO_SKIP_SECONDS)
+    if available<MIN_DURATION:
+        return []
+    count=max(1,min(MAX_ANALYSIS_WINDOWS,int(available//ANALYSIS_WINDOW_SECONDS)))
+    width=available/count
+    windows=[]
+    for index in range(count):
+        lower=INTRO_SKIP_SECONDS+index*width
+        upper=min(float(duration),INTRO_SKIP_SECONDS+(index+1)*width)
+        span=min(float(ANALYSIS_WINDOW_SECONDS),upper-lower)
+        if span<MIN_DURATION:
+            continue
+        free=max(0.0,upper-lower-span)
+        starts=sorted(set(int(round(lower+free*f)) for f in (0,.25,.5,.75,1)))
+        def activity(start):
+            # High speech/activity energy is a hint, not a virality score.
+            sample=volumes[max(0,start):min(len(volumes),start+int(span))]
+            if not sample:
+                return -1000.0
+            top=sorted(sample,reverse=True)[:min(15,len(sample))]
+            return sum(top)/len(top)
+        selected=max(starts,key=lambda start:(activity(start),
+                              -abs(start-(lower+free/2))))
+        stop=min(int(duration),selected+int(span))
+        if stop-selected>=MIN_DURATION:
+            windows.append((selected,stop))
+    return windows
+
+
+def _extract_analysis_window(source: Path, output: Path, start: int,
+                             stop: int) -> None:
+    """Copy only this PCM window; never load a multi-hour WAV into RAM."""
+    with wave.open(str(source),'rb') as origin:
+        rate=origin.getframerate()
+        if (origin.getnchannels()!=1 or origin.getsampwidth()!=2 or
+            rate!=16000 or origin.getcomptype()!='NONE'):
+            raise IntegrationError('WhisperX exige o WAV de análise PCM mono 16 kHz.')
+        origin.setpos(min(origin.getnframes(),int(start*rate)))
+        with wave.open(str(output),'wb') as target:
+            target.setparams(origin.getparams())
+            target.writeframes(origin.readframes(int((stop-start)*rate)))
+
+
+def _offset_alignment(aligned: dict, start: int, stop: int) -> dict:
+    """Translate only genuine aligned timestamps back to the original VOD."""
+    segments=[]
+    words=[]
+    duration=stop-start
+    for segment in aligned.get('segments',[]):
+        local_words=[]
+        for word in segment.get('words',[]):
+            try:
+                a,b=float(word['start']),float(word['end'])
+            except (TypeError,ValueError,KeyError):
+                continue
+            if not all(math.isfinite(v) for v in (a,b)) or not 0<=a<b<=duration+.5:
+                continue
+            token=str(word.get('word') or word.get('text') or '').strip()
+            if not token:
+                continue
+            item={'text':token,'start':round(start+a,3),
+                  'end':round(start+b,3),'confidence':float(word.get('score') or 0)}
+            local_words.append(item)
+        if not local_words:
+            # Inaccurate/unaligned ASR segments are not eligible highlights.
+            continue
+        # A complete segment must be backed by aligned words. Keep its actual
+        # segment boundaries, clamped to the sampled window, in global time.
+        try:
+            a,b=float(segment['start']),float(segment['end'])
+        except (KeyError,ValueError,TypeError):
+            a=local_words[0]['start']-start
+            b=local_words[-1]['end']-start
+        if not all(math.isfinite(v) for v in (a,b)):
+            continue
+        a=max(0.0,a)
+        b=min(float(duration),b)
+        if b<=a:
+            continue
+        segments.append({'start':round(start+a,3),'end':round(start+b,3),
+                         'text':str(segment.get('text') or
+                            ' '.join(word['text'] for word in local_words)).strip()})
+        words.extend(local_words)
+    return {'segments':segments,'words':words}
+
+
+def _whisperx_words(path: Path, folder: Path, volumes: list[float]|None=None,
+                    clip_id: str|None=None):
+    """WhisperX forced alignment on bounded windows with resumable checkpoints."""
     cached=folder/'transcript.json'
+    with wave.open(str(path),'rb') as source:
+        duration=source.getnframes()/source.getframerate()
+    windows=_analysis_windows(volumes or [],duration)
+    if not windows:
+        raise IntegrationError('Live muito curta após os cinco minutos de introdução.')
     if cached.is_file():
-        data=json.loads(cached.read_text('utf-8'))
-        if data.get('method')=='whisperx_forced_alignment' and data.get('words'):
+        try:
+            data=json.loads(cached.read_text('utf-8'))
+        except (OSError,ValueError):
+            data={}
+        if (data.get('method')=='whisperx_forced_alignment' and
+            data.get('words') and data.get('segments') and
+            (data.get('scope') is None or
+             (data.get('scope')=='sampled' and
+              data.get('sampling_version')==TRANSCRIPTION_SAMPLING_VERSION and
+              data.get('windows')==[list(window) for window in windows] and
+              abs(float(data.get('source_duration',0))-duration)<.1))):
             return data
     try:
         import whisperx
@@ -88,23 +201,66 @@ def _whisperx_words(path: Path, folder: Path):
     import os
     device=os.environ.get('WHISPERX_DEVICE','cpu')
     compute_type='int8' if device=='cpu' else 'float16'
-    model=whisperx.load_model('small',device,compute_type=compute_type,language='pt')
-    audio=whisperx.load_audio(str(path))
-    result=model.transcribe(audio,batch_size=8,language='pt')
-    align_model,metadata=whisperx.load_align_model(language_code=result['language'],device=device)
-    aligned=whisperx.align(result['segments'],align_model,metadata,audio,device,
-                            return_char_alignments=False)
+    model=None
+    alignment=None
+    metadata=None
+    segments=[]
     words=[]
-    for seg in aligned.get('segments',[]):
-        for item in seg.get('words',[]):
-            if 'start' in item and 'end' in item and item.get('word'):
-                words.append({'text':item['word'].strip(),'start':float(item['start']),
-                              'end':float(item['end']),
-                              'confidence':float(item.get('score') or 0)})
-    if not words:
-        raise IntegrationError('WhisperX não retornou timestamps alinhados; corte suspenso.')
-    payload={'method':'whisperx_forced_alignment','language':result.get('language','pt'),
-             'words':words,'segments':aligned.get('segments',[])}
+    for index,(start,stop) in enumerate(windows,1):
+        if clip_id:
+            _set_stage(clip_id,f'TRANSCRIBING_{index}_OF_{len(windows)}')
+            db.put_setting('worker_heartbeat',time.time())
+        chunk=folder/f'transcript-window-{start}-{stop}.json'
+        current=None
+        if chunk.is_file():
+            try:
+                item=json.loads(chunk.read_text('utf-8'))
+                if (item.get('method')=='whisperx_forced_alignment' and
+                    item.get('sampling_version')==TRANSCRIPTION_SAMPLING_VERSION and
+                    item.get('window')==[start,stop]):
+                    current=item
+            except (OSError,ValueError):
+                pass
+        if current is None:
+            if model is None:
+                model=whisperx.load_model('small',device,compute_type=compute_type,
+                                         language='pt')
+            if alignment is None:
+                alignment,metadata=whisperx.load_align_model(language_code='pt',
+                                                             device=device)
+            window_file=folder/f'analysis-window-{index:02d}.wav'
+            try:
+                _extract_analysis_window(path,window_file,start,stop)
+                audio=whisperx.load_audio(str(window_file))
+                result=model.transcribe(audio,batch_size=8,language='pt')
+                if result.get('segments'):
+                    aligned=whisperx.align(result['segments'],alignment,metadata,
+                                           audio,device,return_char_alignments=False)
+                    current=_offset_alignment(aligned,start,stop)
+                else:
+                    current={'segments':[],'words':[]}
+            finally:
+                window_file.unlink(missing_ok=True)
+            current.update({'method':'whisperx_forced_alignment',
+                            'sampling_version':TRANSCRIPTION_SAMPLING_VERSION,
+                            'window':[start,stop]})
+            db.atomic(chunk,json.dumps(current,ensure_ascii=False))
+        segments.extend(current['segments'])
+        words.extend(current['words'])
+        if clip_id:
+            db.put_setting('worker_heartbeat',time.time())
+            db.log_event(None,'live_cuts','TRANSCRIPTION_WINDOW',
+                         f'Live {clip_id}: janela {index}/{len(windows)} '
+                         f'({start}s–{stop}s) analisada com WhisperX.')
+    if not words or not segments:
+        raise IntegrationError('Nenhum trecho com palavras alinhadas encontrado nas janelas da live.')
+    segments.sort(key=lambda x:x['start'])
+    words.sort(key=lambda x:x['start'])
+    payload={'method':'whisperx_forced_alignment','language':'pt','scope':'sampled',
+             'sampling_version':TRANSCRIPTION_SAMPLING_VERSION,
+             'source_duration':duration,'windows':[list(window) for window in windows],
+             'analyzed_seconds':sum(stop-start for start,stop in windows),
+             'words':words,'segments':segments}
     db.atomic(cached,json.dumps(payload,ensure_ascii=False))
     return payload
 
@@ -191,7 +347,11 @@ def _score_candidates(transcript: dict, volumes: list[float],
         except (KeyError,ValueError,TypeError):
             continue
         cursor=i
-        while cursor+1<len(segments) and float(segments[cursor]['end'])-begin<28:
+        while (cursor+1<len(segments) and
+               float(segments[cursor]['end'])-begin<28 and
+               float(segments[cursor+1]['start'])-float(segments[cursor]['end'])<=3):
+            # Sampled windows have real gaps between them. Never assemble
+            # an artificial sentence across two distant analysis windows.
             cursor+=1
         if cursor>=len(segments):
             continue
@@ -375,7 +535,7 @@ def render_clip(clip_id):
     _set_stage(clip_id,'ANALYZING_AUDIO')
     volume,wav=_volume_levels(audio,folder)
     _set_stage(clip_id,'TRANSCRIBING')
-    transcript=_whisperx_words(wav,folder)
+    transcript=_whisperx_words(wav,folder,volumes=volume,clip_id=clip_id)
     _set_stage(clip_id,'SELECTING')
     choices_file=folder/'candidates.json'
     stream_duration=max(float(len(volume)),max(

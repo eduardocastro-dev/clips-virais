@@ -6,6 +6,7 @@ live-clip and event records. Does not run, retry or modify any production job.
 from __future__ import annotations
 
 import time
+import re
 from backend import core as db
 
 STAGES = {
@@ -61,6 +62,9 @@ def _format_job(job, videos, clips, events, now):
     stage_code = (clip or {}).get("stage") if family == "clip" else (video or {}).get("stage") if family == "pipeline" else None
     if family == "background" and kind == "radar20_scan":
         stage_text = str(db.get_setting("radar20_scan_status", "Consultando canais públicos."))
+    elif family == "clip" and stage_code and re.fullmatch(r'TRANSCRIBING_(\d+)_OF_(\d+)',stage_code):
+        step,total=re.fullmatch(r'TRANSCRIBING_(\d+)_OF_(\d+)',stage_code).groups()
+        stage_text=f'Transcrevendo com WhisperX · janela {int(step)}/{int(total)}'
     elif family == "clip" and stage_code and "_" in stage_code:
         parts=stage_code.rsplit("_",1)
         step=next((text for code,text in STAGES['clip'] if code==parts[0]),None)

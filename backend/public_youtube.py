@@ -184,10 +184,15 @@ def live_ended_at(info: dict) -> datetime | None:
     start=_stream_time(details.get('actualStartTime'))
     if start and info.get('live_status')=='was_live' and isinstance(duration,(int,float)) and duration>0:
         return start+timedelta(seconds=duration)
-    # yt-dlp's release time is often closer to broadcast time than upload.
+    # yt-dlp's release_timestamp represents the moment of release/start,
+    # not necessarily when the live ended. For a completed replay with a
+    # measured duration, derive an approximate end without pretending that
+    # YouTube returned actualEndTime.
     if info.get('live_status')=='was_live':
-        return (_stream_time(info.get('release_timestamp')) or
-                video_published_at(info))
+        release=_stream_time(info.get('release_timestamp'))
+        if release and isinstance(duration,(int,float)) and duration>0:
+            return release+timedelta(seconds=duration)
+        return video_published_at(info)
     return None
 
 

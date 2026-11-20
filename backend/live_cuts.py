@@ -33,30 +33,42 @@ def allowlist():
     return _read(ALLOWLIST, {'channels':[], 'policy':'Explicit permission required before any download.'})
 
 
-def allow_creator(channel_id: str, evidence: str, owner: str='operator'):
+def allow_creator(channel_id: str, evidence: str, owner: str='operator', video_id: str | None=None):
     if not CHANNEL_PATTERN.fullmatch(channel_id or ''):
         raise ValueError('Channel ID deve começar com UC e conter 24 caracteres.')
     evidence=(evidence or '').strip()
     if len(evidence)<15:
         raise ValueError('Forneça comprovação verificável de autorização para criar e publicar cortes.')
+    if video_id is not None and not re.fullmatch(r'[A-Za-z0-9_-]{11}',video_id):
+        raise ValueError('ID da live não é válido para autorização individual.')
     channels=allowlist()['channels']
-    channels=[c for c in channels if c['channel_id'] != channel_id]
+    # A scoped VOD grant must not replace an existing channel-wide license.
+    channels=[c for c in channels if not
+              (c['channel_id']==channel_id and c.get('video_id')==video_id)]
     channels.append({'channel_id':channel_id, 'evidence':evidence[:2000],
+                     'video_id':video_id,'scope':'SINGLE_LIVE' if video_id else 'CHANNEL',
                      'approved_by':owner[:100], 'updated_at':datetime.now(timezone.utc).isoformat(),
                      'status':'OPERATOR_DECLARED'})
     _write(ALLOWLIST, {'channels':channels,'policy':'Only operator-declared clip permissions.'})
     return channels[-1]
 
 
-def remove_creator(channel_id: str):
-    channels=[c for c in allowlist()['channels'] if c['channel_id']!=channel_id]
+def remove_creator(channel_id: str, video_id: str|None=None):
+    if video_id is not None and not re.fullmatch(r'[A-Za-z0-9_-]{11}',video_id):
+        raise ValueError('ID da live inválido.')
+    channels=[c for c in allowlist()['channels']
+              if c['channel_id']!=channel_id or
+              (video_id is not None and c.get('video_id')!=video_id)]
     _write(ALLOWLIST,{'channels':channels,'policy':'Only operator-declared clip permissions.'})
-    return {'removed':channel_id}
+    return {'removed':channel_id,'video_id':video_id}
 
 
-def authorized_channel(channel_id: str):
+def authorized_channel(channel_id: str, video_id: str|None=None):
+    # Unscoped lookups (e.g. automatic discovery) require channel-wide grants.
+    # VOD-scoped grants are valid only for the exact source video requested.
     return next((x for x in allowlist()['channels']
                  if x['channel_id']==channel_id and
+                 (not x.get('video_id') or x['video_id']==video_id) and
                  len(str(x.get('evidence') or '').strip())>=15),None)
 
 
@@ -74,8 +86,8 @@ def verified_live(entry: dict):
     if not re.fullmatch(r'[A-Za-z0-9_-]{11}',video_id):
         raise ValueError('ID de live inválido.')
     channel_id=str(entry.get('channel_id') or '')
-    if not authorized_channel(channel_id):
-        raise ValueError('Canal fora da clipping_allowlist.json (autorização obrigatória).')
+    if not authorized_channel(channel_id,video_id):
+        raise ValueError('Live fora da clipping_allowlist.json (autorização obrigatória).')
     info=public_video_info('https://www.youtube.com/watch?v='+video_id)
     if info.get('channel_id')!=channel_id:
         raise ValueError('O canal da live não corresponde à autorização cadastrada.')
@@ -99,9 +111,9 @@ def submit_live_url(url: str, evidence: str = '', webcam_anchor: str='bottom_lef
     channel_id=str(info.get('channel_id') or '')
     if not CHANNEL_PATTERN.fullmatch(channel_id):
         raise ValueError('O canal original não pôde ser identificado pelo link público.')
-    if not authorized_channel(channel_id) and (evidence or '').strip():
-        allow_creator(channel_id,evidence)
-    if not authorized_channel(channel_id):
+    if not authorized_channel(channel_id,vid) and (evidence or '').strip():
+        allow_creator(channel_id,evidence,video_id=vid)
+    if not authorized_channel(channel_id,vid):
         record_right(vid,channel_id,'BLOCKED','Canal sem permissão de corte cadastrada.')
         raise ValueError('Informe uma autorização válida para reutilizar a live do canal UC '+channel_id+'.')
     if not public_ended_live(info,days=RADAR_WINDOW_DAYS):
@@ -113,7 +125,7 @@ def submit_live_url(url: str, evidence: str = '', webcam_anchor: str='bottom_lef
     exists=db.rows('SELECT id,status FROM live_clips WHERE video_id=:id',{'id':vid})
     if exists:
         raise ValueError('Esta live já possui um corte registrado no histórico.')
-    permission=authorized_channel(channel_id)
+    permission=authorized_channel(channel_id,vid)
     ident=db.uid()
     now=time.time()
     db.execute("""INSERT INTO live_clips
@@ -171,7 +183,7 @@ def enqueue_next():
     cutoff=datetime.now(timezone.utc)-timedelta(days=RADAR_WINDOW_DAYS)
     for entry in ordered:
         vid=entry.get('id')
-        if not vid or not authorized_channel(entry.get('channel_id','')):
+        if not vid or not authorized_channel(entry.get('channel_id',''),vid):
             continue
         published=_utc_time(entry.get('published_at'))
         if not published or published<cutoff or not entry.get('ended'):
@@ -188,7 +200,7 @@ def enqueue_next():
         except (ValueError,IntegrationError) as exc:
             record_right(vid,entry['channel_id'],'BLOCKED',str(exc))
             continue
-        permission=authorized_channel(entry['channel_id'])
+        permission=authorized_channel(entry['channel_id'],vid)
         if not past:
             ident=db.uid()
             db.execute("""INSERT INTO live_clips

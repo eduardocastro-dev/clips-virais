@@ -119,6 +119,13 @@ def revoke_permission(channel_id: str):
     return remove_creator(channel_id)
 
 
+@router.delete('/clipping-allowlist/{channel_id}/live/{video_id}')
+def revoke_live_permission(channel_id: str,video_id: str):
+    from backend.live_cuts import remove_creator
+    try:return remove_creator(channel_id,video_id)
+    except ValueError as exc:raise HTTPException(422,str(exc)) from None
+
+
 class ManualLiveInput(BaseModel):
     url: str = Field(min_length=20,max_length=350)
     evidence: str = Field(default='',max_length=2000)
@@ -159,7 +166,7 @@ def live_clip_decision(id: str, body: ClipDecision):
         raise HTTPException(409,'Somente cortes validados podem receber decisão.')
     if body.decision=='approve':
         from backend.live_cuts import authorized_channel
-        if not authorized_channel(clip['channel_id']):
+        if not authorized_channel(clip['channel_id'],clip['video_id']):
             raise HTTPException(409,'Autorização para cortar a live foi revogada.')
         try:
             file=db.safe_file(clip['file_path'])

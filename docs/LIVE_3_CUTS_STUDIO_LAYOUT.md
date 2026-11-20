@@ -9,8 +9,10 @@ validados e persistidos individualmente, com SEO próprio.
 ## Regras de produção
 1. A seleção manual do VOD pode ser feita pelo formulário ou diretamente na lista
    de lives encontradas pelo Viral Radar. Cada item não autorizado apresenta
-   **Incluir autorização e gerar 3 cortes**. A prova declarada autoriza o canal,
-   dentro da `clipping_allowlist.json`, antes de qualquer download.
+   **Incluir autorização e gerar 3 cortes**. A prova declarada autoriza
+   **somente o VOD selecionado**, salvo quando o operador cadastrar, na aba
+   de permissões, uma licença específica para o canal inteiro. Ambas são
+   registradas na `clipping_allowlist.json` antes de qualquer download.
 2. O operador escolhe em qual canto da fonte está a webcam (padrão: inferior
    esquerdo, testado com o vídeo do Patife). Pode escolher os outros três cantos.
 3. Um job `live_cut:<parent_id>` valida VOD e direitos, baixa o áudio uma vez,

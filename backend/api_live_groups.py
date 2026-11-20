@@ -66,7 +66,7 @@ def decide_output(parent_id:str,output_id:str,body:OutputDecision):
     if child['status']!='REVIEW_PENDING':
         raise HTTPException(409,'Somente cortes aguardando revisão podem receber decisão.')
     if body.decision=='approve':
-        if not authorized_channel(parent['channel_id']):
+        if not authorized_channel(parent['channel_id'],parent['video_id']):
             raise HTTPException(409,'Autorização do criador revogada.')
         _validated_path(child['file_path'])
     status='APPROVED' if body.decision=='approve' else 'DISCARDED'
@@ -121,7 +121,7 @@ def rerender_live(parent_id:str,body:Rerender):
     parents=db.rows('SELECT * FROM live_clips WHERE id=:id',{'id':parent_id})
     if not parents:raise HTTPException(404,'Live não encontrada.')
     live=parents[0]
-    if not authorized_channel(live['channel_id']):
+    if not authorized_channel(live['channel_id'],live['video_id']):
         raise HTTPException(409,'Permissão do canal revogada.')
     if not within_deadline(config()):
         raise HTTPException(409,'Horário limite atingido. Tente no próximo dia.')

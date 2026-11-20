@@ -73,7 +73,7 @@ def test_individual_review_does_not_approve_siblings(client,monkeypatch):
     parent=_parent(status='REVIEW_PENDING')
     children=[_output(parent,i) for i in (1,2,3)]
     monkeypatch.setattr(live_cuts,'authorized_channel',
-                        lambda _channel:{'evidence':'Licença documentada'})
+                        lambda _channel,_video_id=None:{'evidence':'Licença documentada'})
     response=client.post(f'/api/live-clips/{parent}/outputs/{children[0]}/decision',
                          json={'decision':'approve'})
     assert response.status_code==200
@@ -104,7 +104,7 @@ def test_rerender_legacy_live_preserves_old_file(client,monkeypatch):
                {'id':parent,'file':str(old.relative_to(db.ROOT))})
     db.init_db()  # additive migration imports the legacy output
     monkeypatch.setattr(live_cuts,'authorized_channel',
-                        lambda _channel:{'evidence':'Licença documentada'})
+                        lambda _channel,_video_id=None:{'evidence':'Licença documentada'})
     monkeypatch.setattr(daily_quota,'within_deadline',
                         lambda *args,**kwargs:True)
     response=client.post(f'/api/live-clips/{parent}/reprocess',
@@ -135,6 +135,22 @@ def test_manual_permission_and_anchor_are_recorded(monkeypatch):
     assert 'Permissão escrita' in row['rights_evidence']
 
 
+def test_scoped_permission_only_applies_to_the_selected_live(monkeypatch,tmp_path):
+    monkeypatch.setattr(live_cuts.db,'DATA',tmp_path)
+    scoped='ABCD1234xyz'
+    other='ZZZZ1234xyz'
+    live_cuts.allow_creator(CHANNEL,'Autorização escrita exclusiva desta live.',
+                            video_id=scoped)
+    assert live_cuts.authorized_channel(CHANNEL,scoped)
+    assert live_cuts.authorized_channel(CHANNEL,other) is None
+    assert live_cuts.authorized_channel(CHANNEL) is None
+    live_cuts.remove_creator(CHANNEL,scoped)
+    assert live_cuts.authorized_channel(CHANNEL,scoped) is None
+    # Channel-wide permission is explicitly different and remains optional.
+    live_cuts.allow_creator(CHANNEL,'Autorização escrita para o canal inteiro.')
+    assert live_cuts.authorized_channel(CHANNEL,other)
+
+
 def test_render_three_outputs_after_single_transcription(monkeypatch):
     parent=_parent()
     import backend.live_clip_render as render
@@ -142,7 +158,7 @@ def test_render_three_outputs_after_single_transcription(monkeypatch):
     # FFmpeg is installed in Docker, but isn't needed for this fully mocked unit render.
     monkeypatch.setattr(render.media,'binary',lambda _name:'ffmpeg')
     monkeypatch.setattr(live_cuts,'authorized_channel',
-                        lambda _channel:{'evidence':'Licença documentada'})
+                        lambda _channel,_video_id=None:{'evidence':'Licença documentada'})
     monkeypatch.setattr(render,'verified_live',lambda *args,**kwargs:{})
     monkeypatch.setattr(daily_quota,'within_deadline',lambda *args,**kwargs:True)
     def fake_audio(url,folder):
@@ -186,10 +202,11 @@ def test_render_three_outputs_after_single_transcription(monkeypatch):
 
 
 def test_2_eligible_segments_do_not_become_3_fake_cuts(monkeypatch):
-    parent=_parent()
+    # Different parent ID so the previous test's cached candidates cannot leak in.
+    parent=_parent(id='b'*32)
     import backend.live_clip_render as render
     monkeypatch.setattr(render.media,'binary',lambda _name:'ffmpeg')
-    monkeypatch.setattr(live_cuts,'authorized_channel',lambda _channel:{'evidence':'valid'})
+    monkeypatch.setattr(live_cuts,'authorized_channel',lambda _channel,_video_id=None:{'evidence':'valid'})
     monkeypatch.setattr(render,'verified_live',lambda *a,**kw:{})
     monkeypatch.setattr(daily_quota,'within_deadline',lambda *a,**kw:True)
     monkeypatch.setattr(render,'_audio_first',lambda url,folder:folder/'cached.mp3')

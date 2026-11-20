@@ -280,7 +280,7 @@ def render_clip(clip_id):
     records=db.rows('SELECT * FROM live_clips WHERE id=:id',{'id':clip_id})
     if not records:raise ValueError('Live não encontrada.')
     clip=records[0]
-    if not authorized_channel(clip['channel_id']):
+    if not authorized_channel(clip['channel_id'],clip['video_id']):
         raise IntegrationError('Direitos de cortes não documentados na allowlist.')
     if not within_deadline(quota_config()):
         raise IntegrationError('Deadline diário atingido antes do início da live.')
@@ -307,9 +307,14 @@ def render_clip(clip_id):
             candidates=[]
     else:
         candidates=[]
+    threshold=quota_config()['min_live_score']
+    # A cached candidate selection from an older run must not bypass a new,
+    # stricter operator score threshold after a reprocess or restart.
+    if any(float(item.get('score') or 0)<threshold for item in candidates):
+        candidates=[]
     if len(candidates)<total:
         candidates=_score_candidates(
-            transcript,volume,min_score=quota_config()['min_live_score'])
+            transcript,volume,min_score=threshold)
         if len(candidates)<total:
             raise IntegrationError(
                 f'Só {len(candidates)} trechos distintos passaram no score mínimo. '
@@ -321,14 +326,17 @@ def render_clip(clip_id):
     ff=media.binary('ffmpeg')
     latest=None
     for index,choice in enumerate(selections,1):
-        if not authorized_channel(clip['channel_id']):
+        if not authorized_channel(clip['channel_id'],clip['video_id']):
             raise IntegrationError('Autorização de corte revogada durante a produção.')
         if _validated_output(clip,index):
             _set_stage(clip_id,f'RENDERED_{index}')
             continue
         if not within_deadline(quota_config()):
             raise IntegrationError('Deadline da produção atingido antes de concluir os três cortes.')
-        individual=folder/f'cut-{index:02d}'
+        # A changed score threshold can pick another timestamp on a rerun.
+        # Cache excerpt bytes by their actual time window, not just ordinal.
+        window_key=f"{int(round(choice['start']*100)):08d}-{int(round(choice['end']*100)):08d}"
+        individual=folder/f'cut-{index:02d}-{window_key}'
         individual.mkdir(parents=True,exist_ok=True)
         _set_stage(clip_id,f'DOWNLOADING_EXCERPT_{index}')
         source=_get_range(clip['source_url'],choice['start'],choice['end'],individual)
@@ -381,7 +389,7 @@ def render_clip(clip_id):
                          AND status IN ('REVIEW_PENDING','APPROVED')
                          AND file_path IS NOT NULL ORDER BY ordinal""",
                       {'id':clip_id})
-    if not authorized_channel(clip['channel_id']):
+    if not authorized_channel(clip['channel_id'],clip['video_id']):
         raise IntegrationError('Autorização de corte revogada antes da revisão humana.')
     if len(completed)<total:
         raise IntegrationError(

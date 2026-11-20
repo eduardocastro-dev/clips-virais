@@ -157,17 +157,22 @@ export default function RadarOps({token,mode}:Props){
           <button disabled={busy}><ShieldCheck size={15}/> Autorizar canal</button>
         </form>
         {(allow.channels||[]).map((item:Row)=><div key={item.channel_id} className="radar-result">
-          <strong>{item.channel_id}</strong><small>{item.status} · {item.evidence}</small>
-          <button disabled={busy} onClick={()=>act('clipping-allowlist/'+item.channel_id,undefined,'DELETE','Autorização revogada.')}>Revogar</button>
+          <strong>{item.channel_id}</strong><small>{item.video_id?'Autorização apenas da live '+item.video_id:'Autorização do canal inteiro'} · {item.status} · {item.evidence}</small>
+          <button disabled={busy} onClick={()=>act(
+            'clipping-allowlist/'+item.channel_id+
+             (item.video_id?'/live/'+item.video_id:''),
+            undefined,'DELETE','Autorização revogada.')}>
+            {item.video_id?'Revogar apenas esta live':'Revogar canal'}
+          </button>
         </div>)}
       </section>
       <section className="panel">
         <div className="section-title"><h2>Lives públicas encerradas (M−1)</h2><button disabled={busy} onClick={()=>act('viral-radar/scan',undefined,'POST','Pesquisa agendada.')}><RefreshCw size={14}/> Reescanear</button></div>
         {(radar.recent_lives?.items||[]).slice(0,30).map((l:Row)=><div className="radar-result" key={l.id}>
           <strong>{l.title}</strong><small>{l.creator} · {l.published_at?.slice(0,10)} · score {l.score}</small>
-          <small>{(allow.channels||[]).some((a:Row)=>a.channel_id===l.channel_id)?'Autorização declarada':'Aguardando autorização de corte'}</small>
+          <small>{(allow.channels||[]).some((a:Row)=>a.channel_id===l.channel_id&&(!a.video_id||a.video_id===l.id))?'Autorização declarada':'Aguardando autorização de corte'}</small>
           <a href={l.url} target="_blank" rel="noopener noreferrer">Assistir ao VOD original</a>
-          {(allow.channels||[]).some((a:Row)=>a.channel_id===l.channel_id)
+          {(allow.channels||[]).some((a:Row)=>a.channel_id===l.channel_id&&(!a.video_id||a.video_id===l.id))
             ?<button disabled={busy} onClick={()=>void submitRadarLive(l,'')}>Gerar 3 cortes desta live</button>
             :<div className="live-source-authorization">
               <button type="button" disabled={busy}

@@ -134,7 +134,7 @@ export default function LiveStudioPanel({token,embedded=false,onActivityChange}:
         <div className="live-production-header">
           <div className="live-production-info">
             <strong>{live.title}</strong>
-            <small>{humanStatus(live.status)} · {completed}/{expected} cortes avaliados · {outputs.length} visíveis · tentativas {live.attempts||0}/3</small>
+            <small>{humanStatus(live.status)} · {completed}/{expected} cortes processados · {outputs.length} visíveis · tentativas {live.attempts||0}/3</small>
             <small><Clock3 size={12}/> {current} · Layout: streamer em cima e gameplay embaixo</small>
             {live.job?.status==='RUNNING'&&<small className="live-active-dot"><span/> Worker executando agora</small>}
           </div>
@@ -182,7 +182,7 @@ export default function LiveStudioPanel({token,embedded=false,onActivityChange}:
                       await api(token,'live-clips/'+live.id+'/outputs/'+cut.id+
                         '/decision',{decision:'discard'},'POST');
                       if(selected===cut.id){setSelected('');setVideoUrl('')}
-                    },'Corte descartado, arquivos removidos e item retirado da lista.');
+                    },'Corte descartado e retirado do painel.');
                 }}>Descartar</button>
               </>}
             </div>

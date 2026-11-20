@@ -81,16 +81,78 @@ def record_right(video_id: str, channel_id: str, outcome: str, message: str):
     _write(RIGHTS_LOG,data)
 
 
+def _yt_dlp_finished_fallback(video_id: str, primary: dict) -> dict | None:
+    """Independent public replay evidence when Data API omits live details.
+
+    Do not use titles, viewer counts or an operator-provided end date as proof
+    that a stream ended. yt-dlp must independently say 'was_live' for the
+    *same public video on the same channel*. The API's privacy/age flags win.
+    """
+    from backend.public_youtube import _extract
+
+    if (primary.get('availability')!='public' or
+        primary.get('age_limit') not in (None,0) or
+        primary.get('is_private') or primary.get('is_unlisted') or
+        primary.get('is_live') or
+        primary.get('live_status') in ('is_live','is_upcoming','post_live')):
+        return None
+
+    url='https://www.youtube.com/watch?v='+video_id
+    try:
+        alternative=_extract(url)
+    except (IntegrationError,ValueError):
+        return None
+    if not isinstance(alternative,dict):
+        return None
+    if (alternative.get('id')!=video_id or
+        alternative.get('channel_id')!=primary.get('channel_id') or
+        not CHANNEL_PATTERN.fullmatch(str(alternative.get('channel_id') or '')) or
+        alternative.get('availability')!='public' or
+        alternative.get('live_status')!='was_live' or
+        alternative.get('is_live') or
+        alternative.get('is_private') or alternative.get('is_unlisted') or
+        alternative.get('age_limit') not in (None,0)):
+        return None
+
+    duration=alternative.get('duration')
+    if not isinstance(duration,(int,float)) or duration<=0:
+        return None
+
+    # Do not fabricate liveStreamingDetails.actualEndTime. We retain both
+    # sources and use the yt-dlp release/start time plus replay duration
+    # when the Data API has no trustworthy actual end.
+    merged={**primary,'live_status':'was_live','is_live':False,
+            'duration':duration,
+            'release_timestamp':alternative.get('release_timestamp'),
+            'timestamp':alternative.get('timestamp'),
+            'upload_date':alternative.get('upload_date'),
+            'metadata_source':'youtube_data_api_v3+yt_dlp_public_replay'}
+    if public_ended_live(merged,days=RADAR_WINDOW_DAYS):
+        return merged
+    return None
+
+
 def _recent_vod_metadata(video_id: str) -> dict:
-    """Retry stale YouTube API cache once if a recent finished stream looks invalid."""
+    """Refresh YouTube live state, then try independent public VOD metadata."""
     url='https://www.youtube.com/watch?v='+video_id
     info=public_video_info(url)
-    if not public_ended_live(info,days=RADAR_WINDOW_DAYS):
-        from backend.youtube_data import configured
-        if configured():
-            # Live broadcasts switch from live/upcoming to archived shortly
-            # after ending. A 6h metadata cache can hold the old status.
-            info=public_video_info(url,fresh=True)
+    if public_ended_live(info,days=RADAR_WINDOW_DAYS):
+        return info
+
+    from backend.youtube_data import configured
+    if configured():
+        # Live broadcasts can switch to VOD while the API cache still says
+        # 'not_live' or 'is_live'; query its origin once without cached values.
+        info=public_video_info(url,fresh=True)
+        if public_ended_live(info,days=RADAR_WINDOW_DAYS):
+            return info
+
+    fallback=_yt_dlp_finished_fallback(video_id,info)
+    if fallback:
+        db.log_event(None,'live_cuts','VERIFIED_REPLAY_FALLBACK',
+                     'YouTube Data API sem prova de fim; yt-dlp confirmou '
+                     'o replay público e encerrado do vídeo '+video_id+'.')
+        return fallback
     return info
 
 

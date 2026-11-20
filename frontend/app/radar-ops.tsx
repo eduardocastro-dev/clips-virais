@@ -61,6 +61,7 @@ export default function RadarOps({token,mode}:Props){
   }
   const shortCount=quota?.approved?.shorts||0;
   const liveCount=quota?.approved?.lives_cuts||0;
+  const failures:Row[]=quota?.failures??[];
   return <div className="radar-ops">
     <section className="panel">
       <div className="section-title"><h2>Cota diária · GTA Studio</h2><button disabled={busy} onClick={()=>refresh().catch(e=>setError(e.message))}><RefreshCw size={14}/> Atualizar</button></div>
@@ -80,7 +81,7 @@ export default function RadarOps({token,mode}:Props){
       </form>
       <p className="muted"><strong>Status dos cortes:</strong> {quota?.live_clip_scheduler_status||'Aguardando processamento.'}</p>
       <p className="muted">Um item só conta após validação automática e disponibilização para revisão humana. Nenhuma postagem é feita automaticamente. Tentativas por item: até três nas filas automáticas de cota.</p>
-      {quota?.failures?.length>0&&<details><summary>Falhas registradas ({quota.failures.length})</summary><ul>{quota.failures.map((f:Row,i:number)=><li key={i}>{f.kind}: {f.reason}</li>)}</ul></details>}
+      {failures.length>0&&<details><summary>Falhas registradas ({failures.length})</summary><ul>{failures.map((f:Row,i:number)=><li key={i}>{f.kind}: {f.reason}</li>)}</ul></details>}
     </section>
     {error&&<p className="banner error" role="alert">{error}</p>}
     {notice&&<p className="banner" role="status">{notice}</p>}

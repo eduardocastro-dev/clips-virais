@@ -16,7 +16,9 @@ from html.parser import HTMLParser
 from urllib.parse import urlsplit
 from backend import core as db
 from backend.integrations import request, IntegrationError
-from backend.public_youtube import public_channel_info, public_channel_entries, public_video_info, public_recent_video, public_ended_live, video_published_at
+from backend.public_youtube import (public_channel_info, public_channel_entries, public_video_info,
+                                    public_recent_video, public_ended_live, video_published_at,
+                                    live_ended_at, live_hype_recency_score)
 
 RADAR_WINDOW_DAYS = 30
 # Discovery yields to user-submitted clips and runs in small batches.
@@ -347,7 +349,8 @@ def scan_recent(limit=30):
         median=statistics.median(counts) if counts else None
         for item in eligible:
             vid=item['id']
-            date=video_published_at(item)
+            end=live_ended_at(item)
+            date=video_published_at(item) or end
             if not date:
                 continue
             views=item.get('view_count')
@@ -378,7 +381,11 @@ def scan_recent(limit=30):
                   'discovery':'public_web_no_key'}
             all_videos.append(info)
             if public_ended_live(item,days=RADAR_WINDOW_DAYS,now=now):
-                lives.append({**info,'ended_at':date.isoformat(),'ended':True})
+                lives.append({**info,'ended_at':end.isoformat(),
+                              'hype_recency_score':live_hype_recency_score(
+                                  item,days=RADAR_WINDOW_DAYS,now=now),
+                              'hype_basis':'freshness_heuristic',
+                              'ended':True})
             if info['score'] is not None:
                 meta={'url':url,'platform':'youtube','title':info['title'],
                       'published':date.isoformat(),'metrics':info['metrics'],
@@ -408,7 +415,9 @@ def scan_recent(limit=30):
     db.put_setting('radar20_scan_status',
                    f'Pesquisa incremental concluída: {completed_channels} canais nesta execução.')
     all_videos.sort(key=lambda x:(x['score'] is not None,x['score'] or 0),reverse=True)
-    lives.sort(key=lambda x:(x['published_at'],x['score'] or 0),reverse=True)
+    # Ended yesterday outranks a stream uploaded yesterday but finished weeks
+    # ago. Only equal freshness scores use the public virality score as a tie.
+    lives.sort(key=lambda x:(x['ended_at'],x['score'] or 0),reverse=True)
     radar={'day':db.today(),'window_days':RADAR_WINDOW_DAYS,
            'scanned_at':now.isoformat(),'top':all_videos[:max(1,min(100,int(limit)))],
            'examined':len(all_videos),'public_only':True,'clipping_rights_granted':False,

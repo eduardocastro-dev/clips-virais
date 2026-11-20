@@ -434,7 +434,7 @@ def youtube_upload(path, script):
     return result['id'], 'https://www.youtube.com/watch?v=' + result['id']
 
 
-def collect_metrics():
+def collect_metrics(force: bool=False):
     """Observe real YouTube statistics; report why each link lacks metrics.
 
     No invented values, and no automatic statistics for platforms without
@@ -446,7 +446,7 @@ def collect_metrics():
     publications=db.rows("""SELECT * FROM publications
                         WHERE status='PUBLICADO' AND platform='youtube'""")
     for pub in publications:
-        if db.cache_get('metrics:'+pub['id']):
+        if not force and db.cache_get('metrics:'+pub['id']):
             summary['cached']+=1
             continue
         url=(pub.get('url') or '').strip()

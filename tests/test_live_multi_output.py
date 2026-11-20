@@ -139,6 +139,8 @@ def test_render_three_outputs_after_single_transcription(monkeypatch):
     parent=_parent()
     import backend.live_clip_render as render
     transcribed=[]
+    # FFmpeg is installed in Docker, but isn't needed for this fully mocked unit render.
+    monkeypatch.setattr(render.media,'binary',lambda _name:'ffmpeg')
     monkeypatch.setattr(live_cuts,'authorized_channel',
                         lambda _channel:{'evidence':'Licença documentada'})
     monkeypatch.setattr(render,'verified_live',lambda *args,**kwargs:{})
@@ -186,6 +188,7 @@ def test_render_three_outputs_after_single_transcription(monkeypatch):
 def test_2_eligible_segments_do_not_become_3_fake_cuts(monkeypatch):
     parent=_parent()
     import backend.live_clip_render as render
+    monkeypatch.setattr(render.media,'binary',lambda _name:'ffmpeg')
     monkeypatch.setattr(live_cuts,'authorized_channel',lambda _channel:{'evidence':'valid'})
     monkeypatch.setattr(render,'verified_live',lambda *a,**kw:{})
     monkeypatch.setattr(daily_quota,'within_deadline',lambda *a,**kw:True)

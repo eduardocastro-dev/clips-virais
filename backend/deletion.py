@@ -119,6 +119,11 @@ def _purge_one(video,reason):
         except OSError:issues.append(str(path.name))
     if issues:
         return {'id':ident,'pending':True,'error':'Arquivos em uso: '+', '.join(issues[:5])}
+    # Older/manual discards still deserve feedback even when cleanup is the
+    # first updated code path to see them. Never veto a failed technical job.
+    if reason=='manual':
+        from backend.editorial_rejections import remember_manual
+        remember_manual(video,when=float(video.get('discarded_at') or time.time()))
     # Foreign key order; removing media first avoids references to missing
     # renders only if this DB mutation succeeds.
     with db.transaction() as c:
@@ -142,6 +147,9 @@ def mark_discarded(video_id,reason='manual'):
     if row.get('approved') or row.get('manual_decision')=='approved':
         raise ValueError('Vídeo já aprovado ou publicado não pode ser descartado por esse fluxo.')
     if row.get('discarded_at'):
+        if reason=='manual':
+            from backend.editorial_rejections import remember_manual
+            remember_manual(row,when=float(row['discarded_at']))
         return {'id':video_id,'status':row['status'],'discarded_at':row['discarded_at']}
     now=time.time()
     db.execute("""UPDATE videos SET status='DISCARDED',discarded_at=:at,
@@ -154,6 +162,9 @@ def mark_discarded(video_id,reason='manual'):
     db.execute("""UPDATE publications SET status='DISCARDED',updated=:now
                    WHERE video_id=:id AND status!='PUBLICADO'""",{'id':video_id,'now':now})
     db.put_setting('video_cancel_requested:'+video_id,True)
+    if reason=='manual':
+        from backend.editorial_rejections import remember_manual
+        remember_manual(row,when=now)
     return {'id':video_id,'status':'DISCARDED','discarded_at':now,
             'delete_after':now+GRACE}
 
@@ -177,6 +188,9 @@ def restore(video_id):
       manual_at=NULL,manual_by=NULL,updated=:now WHERE id=:id""",
       {'id':video_id,'status':before,'now':time.time()})
     db.put_setting('video_cancel_requested:'+video_id,False)
+    # Restoration explicitly withdraws the editorial veto for this item.
+    from backend.editorial_rejections import forget_video
+    forget_video(video_id)
     return {'restored':True,'status':before}
 
 

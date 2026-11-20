@@ -1,5 +1,6 @@
 """Live VOD -> three individual MP4s, safe migration, original layout and rights tests."""
 from __future__ import annotations
+import json
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -173,6 +174,13 @@ def test_render_three_outputs_after_single_transcription(monkeypatch):
     candidates=[{'start':i*1200+310,'end':i*1200+340,'score':83+i,
                  'reason':'Pico de áudio e reação'} for i in range(3)]
     monkeypatch.setattr(render,'_score_candidates',lambda *args,**kwargs:candidates)
+    old_cache=db.ROOT/'videos'/'processing'/'live_cuts'/parent/'candidates.json'
+    old_cache.parent.mkdir(parents=True,exist_ok=True)
+    old_cache.write_text(json.dumps([
+        {'start':10,'end':40,'score':99},
+        {'start':60,'end':90,'score':95},
+        {'start':120,'end':150,'score':95},
+    ]),encoding='utf-8')
     def fake_get(url,start,end,folder):
         path=folder/'source.mp4';path.write_bytes(b'source');return path
     monkeypatch.setattr(render,'_get_range',fake_get)
@@ -193,6 +201,9 @@ def test_render_three_outputs_after_single_transcription(monkeypatch):
     result=render.render_clip(parent)
     assert result['total_cuts']==3
     assert len(transcribed)==1
+    cache=json.loads(old_cache.read_text('utf-8'))
+    assert cache['selection_policy_version']==render.SELECTION_POLICY_VERSION
+    assert [item['start'] for item in cache['cuts']]==[310,1510,2710]
     rows=db.rows('SELECT * FROM live_clip_outputs WHERE parent_id=:id ORDER BY ordinal',
                  {'id':parent})
     assert len(rows)==3

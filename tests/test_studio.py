@@ -205,7 +205,8 @@ def test_retry_model_refunds_rejected_call_and_uses_reported_tokens(monkeypatch)
 def test_missing_metrics_stay_null(monkeypatch):
     id=pipeline.create_video(test=True)
     db.execute("INSERT INTO publications(id,video_id,platform,status,external_id) VALUES ('pub',:video,'youtube','PUBLICADO','abcdefghijk')",{'video':id})
-    monkeypatch.setattr(integrations,'youtube_get',lambda *a:{'items':[{'statistics':{'viewCount':'12'}}]})
+    monkeypatch.setattr(integrations,'public_youtube_metadata',
+                        lambda url:{'metrics':{'viewCount':12}})
     integrations.collect_metrics();integrations.collect_metrics()
     metrics=db.rows('SELECT * FROM metrics')
     assert len(metrics)==1

@@ -87,10 +87,11 @@ def create_video(req: ImportRequest | None = None, test=False, reference=None, v
         existing = c.execute(text('SELECT id FROM videos WHERE url=:url'), params).scalar()
         if existing:
             return existing
-        # One slot per active or approved real production, never one slot per
-        # retry, failed/rejected job or test. São Paulo civil-day boundaries.
+        # Daily slots include active, approved and manually parked productions;
+        # retries, failed/rejected work and tests do not consume extra slots.
+        # Civil-day boundaries follow the configured São Paulo time zone.
         if not test and db.production_usage(c) >= config.daily_limit:
-            raise ValueError('Limite diário de produção atingido (produções ativas + aprovadas hoje).')
+            raise ValueError('Limite diário de produção atingido (inclui Shorts aguardando aprovação manual).')
         c.execute(text('''INSERT INTO videos(id,run_id,url,platform,title,rights,evidence,credits,instructions,template,duration,status,stage,test,created,updated)
             VALUES (:id,:run,:url,:platform,:title,:rights,:evidence,:credits,:instructions,:template,:duration,'QUEUED','diretor',:test,:now,:now)'''), params)
         if manual_script:
@@ -387,6 +388,10 @@ def preserve_unaffected_scenes(video_id, new_script, previous_details, previous_
 def run_pipeline(video_id):
     video = db.rows('SELECT * FROM videos WHERE id=:id', {'id': video_id})[0]
     if video['manual_decision'] in ('discard','approved'):
+        return
+    # A stale/reclaimed job must never restart an item parked for operator review.
+    # Its decision is independent of the remaining production queue.
+    if video['status'] in ('AWAITING_MANUAL_DECISION','PENDING_RIGHTS_REVIEW'):
         return
     if video['approved']:
         distribute(video_id)

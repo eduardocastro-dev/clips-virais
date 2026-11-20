@@ -14,8 +14,9 @@ from backend import core as db
 DEFAULT_LIVE_CUTS = 5
 TIME_ZONE = 'America/Sao_Paulo'
 FINISHED_SHORTS = ("APPROVED",)
-ACTIVE_SHORTS = ("QUEUED", "PROCESSING", "RETRY", "PENDING_RIGHTS_REVIEW")
-FAILED_SHORTS = ("FAILED", "REJECTED", "DISCARDED", "PIPELINE_ERROR", "AWAITING_MANUAL_DECISION")
+ACTIVE_SHORTS = ("QUEUED", "PROCESSING", "RETRY")
+MANUAL_REVIEW_SHORTS = ("PENDING_RIGHTS_REVIEW", "AWAITING_MANUAL_DECISION")
+FAILED_SHORTS = ("FAILED", "REJECTED", "DISCARDED", "PIPELINE_ERROR")
 CLIP_FINISHED = ("REVIEW_PENDING", "APPROVED")
 CLIP_ACTIVE = ("QUEUED", "PROCESSING", "RETRY")
 CLIP_FAILED = ("FAILED", "REJECTED", "BLOCKED", "DISCARDED")
@@ -92,6 +93,7 @@ def state() -> dict:
         clips = []
     approved_shorts = []
     active_shorts = []
+    manual_review_shorts = []
     rejected_shorts = []
     attempts = {}
     failures = []
@@ -104,6 +106,8 @@ def state() -> dict:
             approved_shorts.append(video['id'])
         elif video['status'] in ACTIVE_SHORTS:
             active_shorts.append(video['id'])
+        elif video['status'] in MANUAL_REVIEW_SHORTS:
+            manual_review_shorts.append(video['id'])
         elif video['status'] in FAILED_SHORTS:
             rejected_shorts.append(video['id'])
             failures.append({'kind':'short','id':video['id'],'reason':video['error'] or video['status']})
@@ -133,6 +137,9 @@ def state() -> dict:
             rejected_clips.append(clip['id'])
             failures.append({'kind':'live_cut','id':clip['id'],
                              'reason':clip['error'] or clip['status']})
+    # This is a production cap, not a requirement to force every item through
+    # human approval before allowing the next one to start.
+    used_shorts = db.production_usage()
     missing = {'shorts':max(0,conf['shorts']-len(approved_shorts)),
                'lives_cuts':max(0,conf['lives_cuts']-len(approved_clips))}
     complete = not any(missing.values())
@@ -142,7 +149,11 @@ def state() -> dict:
         'target':{'shorts':conf['shorts'],'lives_cuts':conf['lives_cuts']},
         'approved':{'shorts':len(approved_shorts),'lives_cuts':len(approved_clips)},
         'approved_ids':{'shorts':approved_shorts,'lives_cuts':approved_clips},
-        'pending':{'shorts':len(active_shorts),'lives_cuts':len(active_clips)},
+        'pending':{'shorts':len(active_shorts)+len(manual_review_shorts),'lives_cuts':len(active_clips)},
+        'manual_review':{'shorts':len(manual_review_shorts)},
+        'manual_review_ids':{'shorts':manual_review_shorts},
+        'capacity_used':{'shorts':used_shorts},
+        'capacity_remaining':{'shorts':max(0,conf['shorts']-used_shorts)},
         'rejected':{'shorts':len(rejected_shorts),'lives_cuts':len(rejected_clips)},
         'missing':missing, 'attempts_per_item':attempts, 'failures':failures,
         'deadline_reached':not remaining_time,
@@ -170,6 +181,8 @@ def report(snapshot=None) -> str:
         '',
         '- Status: **'+snapshot['status']+'**',
         '- Shorts: '+str(snapshot['approved']['shorts'])+'/'+str(cfg['shorts'])+' aprovados e enviados para revisão humana',
+        '- Vagas de produção ocupadas hoje: '+str(snapshot['capacity_used']['shorts'])+'/'+str(cfg['shorts'])+' (incluindo revisão manual)',
+        '- Aguardando decisão humana: '+str(snapshot['manual_review']['shorts'])+' Shorts',
         '- Cortes de lives: '+str(snapshot['approved']['lives_cuts'])+'/5 aprovados e enviados para revisão humana',
         '- Horário limite: '+cfg['deadline_local']+' ('+TIME_ZONE+')',
         '- Publicação: manual; nenhuma postagem automática',
@@ -193,8 +206,12 @@ def report(snapshot=None) -> str:
     for short_id in snapshot['approved_ids']['shorts']:
         lines.append('- Short '+short_id+': /api/files/'+short_id)
     lines += ['','## Pendências e ações para o operador']
-    if missing['shorts']:
-        lines.append('- Faltam '+str(missing['shorts'])+' Shorts. Verificar radar público recente, direitos, fontes válidas e jobs técnicos.')
+    if snapshot['manual_review_ids']['shorts']:
+        lines.append('- Aguardando aprovação/direitos: '+', '.join(snapshot['manual_review_ids']['shorts'])+'. A fila segue sem depender da decisão humana.')
+    if missing['shorts'] and snapshot['capacity_remaining']['shorts']>0:
+        lines.append('- Faltam '+str(missing['shorts'])+' Shorts aprovados. Verificar radar público recente, direitos, fontes válidas e jobs técnicos.')
+    elif missing['shorts']:
+        lines.append('- Limite diário ocupado; '+str(missing['shorts'])+' Shorts ainda não foram aprovados. Não abrir novas produções até liberar uma vaga ou iniciar novo dia.')
     if missing['lives_cuts']:
         lines.append('- Faltam '+str(missing['lives_cuts'])+' cortes de lives. '+snapshot.get('live_clip_scheduler_status','')+' Verificar autorização, disponibilidade pública, WhisperX e VODs encerrados dos últimos 30 dias.')
     if not any(missing.values()):

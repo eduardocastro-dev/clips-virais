@@ -126,7 +126,7 @@ def scheduler():
         db.notify('disk:' + db.today(), 'Produção interrompida: menos de 2 GB livres.')
         return
     if db.production_usage() >= config.daily_limit:
-        db.put_setting('scheduler_status', 'Limite diário de produções ativas/aprovadas atingido.')
+        db.put_setting('scheduler_status', 'Limite diário de produções atingido (inclui Shorts em aprovação manual).')
     else:
         db.put_setting('scheduler_status', 'Modo automático ativo; aguardando ou processando oportunidades.')
     # Discovery may have succeeded without creating a video (or a previous
@@ -319,6 +319,10 @@ def tick():
                                {'id':job['video_id']})
             if video_rows:
                 row=video_rows[0]
+                if row['status'] in ('AWAITING_MANUAL_DECISION', 'PENDING_RIGHTS_REVIEW'):
+                    # A review cannot hold the worker. Ask the scheduler to fill
+                    # the next free daily slot on its next tick (not in 60 seconds).
+                    db.put_setting('last_auto_queue', 0)
                 if row.get('discarded_at') and db.get_setting('video_cancel_requested:'+job['video_id'],False):
                     status='DELETING' if row['status']=='DELETING' else 'DISCARDED'
                     db.execute('UPDATE videos SET status=:status WHERE id=:id',

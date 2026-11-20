@@ -87,8 +87,9 @@ def create_video(req: ImportRequest | None = None, test=False, reference=None, v
         existing = c.execute(text('SELECT id FROM videos WHERE url=:url'), params).scalar()
         if existing:
             return existing
-        # One slot per active or approved real production, never one slot per
-        # retry, failed/rejected job or test. São Paulo civil-day boundaries.
+        # Daily slots include active, approved and manually parked productions;
+        # retries, failed/rejected work and tests do not consume extra slots.
+        # Civil-day boundaries follow the configured São Paulo time zone.
         if not test and db.production_usage(c) >= config.daily_limit:
             raise ValueError('Limite diário de produção atingido (produções ativas + aprovadas hoje).')
         c.execute(text('''INSERT INTO videos(id,run_id,url,platform,title,rights,evidence,credits,instructions,template,duration,status,stage,test,created,updated)

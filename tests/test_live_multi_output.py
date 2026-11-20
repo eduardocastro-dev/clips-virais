@@ -164,13 +164,13 @@ def test_render_three_outputs_after_single_transcription(monkeypatch):
     def fake_audio(url,folder):
         file=folder/'dummy.wav';file.write_bytes(b'audio');return file
     monkeypatch.setattr(render,'_audio_first',fake_audio)
-    monkeypatch.setattr(render,'_volume_levels',lambda a,f:([-27.0]*120,f/'dummy.wav'))
+    monkeypatch.setattr(render,'_volume_levels',lambda a,f:([-27.0]*3600,f/'dummy.wav'))
     def transcription(a,f):
         transcribed.append(True)
         return {'words':[{'text':'momento','start':2,'end':3}],
                 'segments':[{'start':2,'end':3,'text':'momento'}]}
     monkeypatch.setattr(render,'_whisperx_words',transcription)
-    candidates=[{'start':i*65+1,'end':i*65+31,'score':83+i,
+    candidates=[{'start':i*1200+310,'end':i*1200+340,'score':83+i,
                  'reason':'Pico de áudio e reação'} for i in range(3)]
     monkeypatch.setattr(render,'_score_candidates',lambda *args,**kwargs:candidates)
     def fake_get(url,start,end,folder):
@@ -210,11 +210,11 @@ def test_2_eligible_segments_do_not_become_3_fake_cuts(monkeypatch):
     monkeypatch.setattr(render,'verified_live',lambda *a,**kw:{})
     monkeypatch.setattr(daily_quota,'within_deadline',lambda *a,**kw:True)
     monkeypatch.setattr(render,'_audio_first',lambda url,folder:folder/'cached.mp3')
-    monkeypatch.setattr(render,'_volume_levels',lambda audio,folder:([-20.0]*120,folder/'audio.wav'))
+    monkeypatch.setattr(render,'_volume_levels',lambda audio,folder:([-20.0]*3600,folder/'audio.wav'))
     monkeypatch.setattr(render,'_whisperx_words',lambda audio,folder:{'words':[],'segments':[]})
     monkeypatch.setattr(render,'_score_candidates',
-                        lambda *args,**kwargs:[{'start':1,'end':31,'score':90},
-                                                {'start':75,'end':105,'score':90}])
+                        lambda *args,**kwargs:[{'start':310,'end':340,'score':90},
+                                                {'start':1510,'end':1540,'score':90}])
     with pytest.raises(IntegrationError,match='São necessários 3'):
         render.render_clip(parent)
     assert db.rows('SELECT * FROM live_clip_outputs WHERE parent_id=:id',{'id':parent})==[]

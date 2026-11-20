@@ -102,6 +102,38 @@ def _remove_discarded_media(parent_id: str, child: dict) -> list[str]:
     return removed
 
 
+def _redirect_parent_file(parent_id: str, discarded: dict) -> None:
+    """Keep the legacy parent render pointer off a discarded child's MP4."""
+    parent=db.rows('SELECT file_path FROM live_clips WHERE id=:id',{'id':parent_id})
+    if not parent or parent[0]['file_path']!=discarded.get('file_path'):
+        return
+    remaining=db.rows("""SELECT file_path,score,segment_start,segment_end
+                FROM live_clip_outputs WHERE parent_id=:parent
+                AND status IN ('REVIEW_PENDING','APPROVED')
+                AND file_path IS NOT NULL ORDER BY ordinal LIMIT 1""",
+                {'parent':parent_id})
+    survivor=remaining[0] if remaining else {}
+    db.execute("""UPDATE live_clips SET file_path=:file,score=:score,
+                 segment_start=:start,segment_end=:end WHERE id=:id""",
+               {'id':parent_id,'file':survivor.get('file_path'),
+                'score':survivor.get('score'),
+                'start':survivor.get('segment_start'),
+                'end':survivor.get('segment_end')})
+
+
+def purge_discarded_live_media(limit: int=100) -> int:
+    """Hourly maintenance also removes files discarded before this feature."""
+    items=db.rows("""SELECT * FROM live_clip_outputs WHERE status='DISCARDED'
+                AND (file_path IS NOT NULL OR cover_path IS NOT NULL
+                     OR metadata_path IS NOT NULL)
+                ORDER BY updated LIMIT :limit""",{'limit':limit})
+    removed=0
+    for child in items:
+        _redirect_parent_file(child['parent_id'],child)
+        removed+=len(_remove_discarded_media(child['parent_id'],child))
+    return removed
+
+
 class OutputDecision(BaseModel):
     decision:str=Field(pattern=r'^(approve|discard)$')
 
@@ -133,19 +165,7 @@ def decide_output(parent_id:str,output_id:str,body:OutputDecision):
     if status=='DISCARDED':
         # The legacy parent points to the first cut. Avoid a stale link when
         # that cut is discarded; choose another valid output if available.
-        if parent.get('file_path')==child.get('file_path'):
-            remaining=db.rows("""SELECT file_path,score,segment_start,segment_end
-                        FROM live_clip_outputs WHERE parent_id=:parent
-                        AND status IN ('REVIEW_PENDING','APPROVED')
-                        AND file_path IS NOT NULL ORDER BY ordinal LIMIT 1""",
-                        {'parent':parent_id})
-            survivor=remaining[0] if remaining else {}
-            db.execute("""UPDATE live_clips SET file_path=:file,score=:score,
-                         segment_start=:start,segment_end=:end WHERE id=:id""",
-                       {'id':parent_id,'file':survivor.get('file_path'),
-                        'score':survivor.get('score'),
-                        'start':survivor.get('segment_start'),
-                        'end':survivor.get('segment_end')})
+        _redirect_parent_file(parent_id,child)
         removed_files=_remove_discarded_media(parent_id,child)
     record_right(parent['video_id'],parent['channel_id'],status,
                  'Revisão manual do corte '+str(child['ordinal'])+' / '+output_id)

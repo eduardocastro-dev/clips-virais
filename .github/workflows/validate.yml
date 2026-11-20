@@ -27,7 +27,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt
       - name: Test multi-cut and API regressions
-        run: python -m pytest -q tests/test_live_multi_output.py tests/test_live_quota_radar.py tests/test_live_window_sampling.py tests/test_api_boot_smoke.py tests/test_scenarios_tv.py tests/test_operations_monitor.py tests/test_youtube_connections.py tests/test_template_package.py tests/test_video_deletion.py
+        run: python -m pytest -q tests/test_live_multi_output.py tests/test_live_quota_radar.py tests/test_live_window_sampling.py tests/test_editorial_analytics.py tests/test_studio.py tests/test_api_boot_smoke.py tests/test_scenarios_tv.py tests/test_operations_monitor.py tests/test_youtube_connections.py tests/test_template_package.py tests/test_video_deletion.py
   web-build:
     runs-on: ubuntu-latest
     defaults:

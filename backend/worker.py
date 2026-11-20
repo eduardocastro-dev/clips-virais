@@ -251,6 +251,10 @@ def perform(job):
                 db.execute('UPDATE profiles SET last_checked=:now WHERE id=:id', dict(now=time.time(), id=profile['id']))
         if db.settings().automatic:
             queue_opportunities()
+    elif kind == 'metrics_collect':
+        result=collect_metrics(force=True)
+        db.log_event(None,'analytics','METRICS_COLLECTED',
+                     'Consulta de métricas YouTube: '+json.dumps(result,ensure_ascii=False))
     elif kind == 'maintenance':
         cleanup()
         # Public, best-effort metrics; never requires a YouTube Data API key.

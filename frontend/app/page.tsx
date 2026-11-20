@@ -1,6 +1,6 @@
 'use client';
 import {useEffect,useState,useCallback} from 'react';
-import {Calendar,MetricChart,BriefingEditor} from './operations';
+import {Calendar,MetricChart,BriefingEditor,approvalDay} from './operations';
 import MediaUpload from './media-upload';
 import AssetLibrary from './asset-library';
 import CastPanel from './cast-panel';
@@ -16,7 +16,7 @@ import PublicationGroups, {groupPublications} from './publication-groups';
 import {Activity, ArrowUpRight, Bell, CheckCircle2, ChevronRight, Clapperboard, Download, Film, Gauge, Globe2, Import, LayoutDashboard, LoaderCircle, Pause, Play, Plus, Radar, RefreshCw, Settings2, ShieldCheck, Square, Users, X} from 'lucide-react';
 
 type Row = Record<string, any>;
-type State = {cast:Row;daily_production_usage:number;settings:Row;assets:Row[];persona:Row;videos:Row[];publications:Row[];profiles:Row[];sources:Row[];opportunities:Row[];notifications:Row[];events:Row[];jobs:Row[];metrics:Row[];usage:Row[];worker_online:boolean;scheduler_status?:string;agents:string[];templates:Record<string,Row>;secrets:string[]};
+type State = {cast:Row;daily_production_usage:number;settings:Row;assets:Row[];persona:Row;videos:Row[];approved_videos?:Row[];metric_checks?:Record<string,Row>;publications:Row[];profiles:Row[];sources:Row[];opportunities:Row[];notifications:Row[];events:Row[];jobs:Row[];metrics:Row[];usage:Row[];worker_online:boolean;scheduler_status?:string;agents:string[];templates:Record<string,Row>;secrets:string[]};
 const tabs = [{name:'Dashboard',icon:LayoutDashboard},{name:'Viral Radar',icon:Radar},{name:'Cortes de Lives',icon:Film},{name:'Importar por URL',icon:Import},{name:'Video Studio',icon:Clapperboard},{name:'Upload de mídia',icon:Import},{name:'Biblioteca de assets',icon:Film},{name:'Fontes e Efeitos',icon:Film},{name:'Prontos para postar',icon:Download},{name:'Analytics',icon:Activity},{name:'Agentes',icon:Users},{name:'Configurações',icon:Settings2}];
 const date = (n:number) => new Date(n*1000).toLocaleString('pt-BR');
 const label = (s:string) => ({AWAITING_MANUAL_DECISION:'Aguardando decisão manual',DISCARDED:'Descartado',APPROVAL_PENDING:'Aprovação solicitada',QUEUED:'Na fila',PROCESSING:'Processando',APPROVED:'Aprovado',REJECTED:'Reprovado',FAILED:'Falha',PAUSED_MISSING_ASSETS:'Faltam assets',PAUSED_VALIDATION:'Validação pendente',RETRY:'Nova tentativa',AGUARDANDO_PUBLICACAO_MANUAL:'Publicação manual',PUBLICADO:'Publicado',DONE:'Concluído',RUNNING:'Executando',PAUSED:'Pausado',PIPELINE_ERROR:'Erro de pipeline',PENDING_RIGHTS_REVIEW:'Prévia pronta · direitos pendentes'}[s] || s);
@@ -27,6 +27,7 @@ export default function Home(){
   const [token,setToken]=useState('');const [authenticated,setAuthenticated]=useState(false);
   const [tab,setTab]=useState('Dashboard'); const [data,setData]=useState<State|null>(null);
   const [studioMode,setStudioMode]=useState<'shorts'|'lives'>('shorts');
+  const [selectedApprovalDay,setSelectedApprovalDay]=useState<string|null>(null);
   const [activeLive,setActiveLive]=useState<{id:string;title:string}|null>(null);
   const [error,setError]=useState('');const [notice,setNotice]=useState('');const [busy,setBusy]=useState(false);
   const [settings,setSettings]=useState<Row|null>(null); const [selected,setSelected]=useState<Row|null>(null);
@@ -121,6 +122,14 @@ export default function Home(){
     !String(job.kind||'').startsWith('live_cut:'));
   const currentShort=data.videos.find(v=>v.id===currentShortJob?.video_id);
   const pendingVideoCount=groupPublications(pending,data.videos).length;
+  const approvedArchive=data.approved_videos||data.videos.filter(v=>v.approved);
+  const editorialVideos=new Map([...data.videos,...approvedArchive].map(v=>[v.id,v]));
+  const visiblePublications=data.publications.filter(p=>!selectedApprovalDay||
+    approvalDay(editorialVideos.get(p.video_id))===selectedApprovalDay);
+  const visibleApproved=approvedArchive.filter(v=>!selectedApprovalDay||
+    approvalDay(v)===selectedApprovalDay);
+  const orphanApproved=visibleApproved.filter(v=>!data.publications.some(p=>p.video_id===v.id));
+  const confirmedPublications=data.publications.filter(p=>p.status==='PUBLICADO');
   const counts=[{name:'Vídeos produzidos',value:data.videos.filter(v=>v.final_path).length,note:'Arquivos renderizados',icon:Film},{name:'Postados manualmente',value:data.publications.filter(p=>p.status==='PUBLICADO').length,note:'Confirmados por você',icon:Globe2},{name:'Na fila manual',value:pendingVideoCount,note:'Vídeos com postagem pendente',icon:Clapperboard},{name:'Falhas de produção',value:data.videos.filter(v=>v.status==='FAILED').length,note:'Consulte os jobs',icon:Activity}];
   return <div className="shell"><aside className="sidebar"><a className="brand" href="#" onClick={()=>setTab('Dashboard')}><span className="brand-icon"><Clapperboard size={22}/></span><span>GTA<span className="cyan">STUDIO</span><small>AUTONOMOUS CONTENT</small></span></a><div className="workspace"><span className="avatar">VI</span><div>{data.settings.channel}<small>Estúdio pessoal</small></div><ShieldCheck size={16}/></div><p className="nav-label">WORKSPACE</p><nav aria-label="Navegação principal">{tabs.map(t=><button key={t.name} className={tab===t.name?'active':''} onClick={()=>{setTab(t.name);if(t.name==='Configurações'){setSettings({...data.settings});loadPersona().catch(e=>setError(e.message))}}}><t.icon size={18}/><span>{t.name}</span>{t.name==='Prontos para postar'&&pendingVideoCount>0&&<b>{pendingVideoCount}</b>}</button>)}</nav><div className="sidebar-bottom"><div className="system-status"><i className={data.worker_online?'online':''}/>{data.worker_online?'Worker conectado':'Worker desconectado'}</div><small>{data.agents.length} agentes · produção em PT-BR</small><button onClick={()=>{setAuthenticated(false);setToken('');setData(null)}}>Encerrar sessão <ArrowUpRight size={14}/></button></div></aside>
     <div className="main"><header className="topbar"><div className="breadcrumb">Workspace <ChevronRight size={14}/><strong>{tab}</strong></div><div className="top-actions"><span className="local-tag">LOCAL / SELF-HOSTED</span><button aria-label="Atualizar dados" disabled={busy} onClick={()=>act(refresh,'Dados atualizados.')}><RefreshCw size={17} className={busy?'spin':''}/></button><button aria-label="Notificações" className="notification" onClick={()=>setShowNotifications(!showNotifications)}><Bell size={18}/>{data.notifications.length>0&&<i/>}</button><span className="user-circle">EC</span></div></header>
@@ -239,8 +248,55 @@ export default function Home(){
       {tab==='Cortes de Lives'&&<RadarOps token={token} mode="cuts"/>}
       {tab==='Biblioteca de assets'&&<AssetLibrary assets={data.assets} token={token} api={api} refresh={refresh} onError={setError}/>}
       {tab==='Fontes e Efeitos'&&<TextStyleLibrary token={token}/>}
-      {tab==='Prontos para postar'&&<section className="panel"><Calendar publications={data.publications}/><div className="section-title"><h2>Vídeos prontos para publicar manualmente</h2><span className="muted">{pendingVideoCount} {pendingVideoCount===1?'vídeo pendente':'vídeos pendentes'} · {pending.length} destinos</span></div><PublicationGroups publications={data.publications} videos={data.videos} api={api} onOpenVideo={openVideo} onChanged={refresh} onError={setError}/></section>}
-      {tab==='Analytics'&&<><MetricChart metrics={data.metrics}/><div className="stats">{['views','likes','comments'].map(metric=>{const latest=new Map<string,Row>();for(const m of data.metrics)if(!latest.has(m.publication_id))latest.set(m.publication_id,m);const values=[...latest.values()].map(m=>JSON.parse(m.data)[metric]).filter(n=>n!=null);return <div className="stat" key={metric}><span>{{views:'Visualizações',likes:'Curtidas',comments:'Comentários'}[metric]}</span><strong>{values.length?values.reduce((a,b)=>a+b,0).toLocaleString('pt-BR'):'—'}</strong><small>{values.length?'Última coleta por publicação':'Sem métricas observadas'}</small></div>})}</div><section className="panel"><h2>Observações por publicação</h2>{data.metrics.length?<div className="table-wrap"><table><thead><tr><th>Data</th><th>Rede</th><th>Template</th><th>Views</th><th>Retenção</th></tr></thead><tbody>{data.metrics.map(m=>{const values=JSON.parse(m.data);return <tr key={m.id}><td>{date(m.observed)}</td><td>{m.platform}</td><td>{m.template}</td><td>{values.views??'—'}</td><td>{values.retention??'Indisponível'}</td></tr>})}</tbody></table></div>:<Empty title="Os dados chegam depois da publicação" detail="Métricas indisponíveis permanecem vazias. Nenhuma estimativa é apresentada como resultado real."/>}</section><button onClick={()=>act(async()=>{const report=await api('report');setHandoffs({relatorio:report});},'Relatório carregado.')}>Consultar relatório diário</button>{handoffs?.relatorio&&<pre>{handoffs.relatorio}</pre>}</>}
+      {tab==='Prontos para postar'&&<section className="panel">
+        <Calendar videos={approvedArchive} selectedDay={selectedApprovalDay}
+          onSelectDay={setSelectedApprovalDay}/>
+        <div className="section-title"><h2>Vídeos aprovados · histórico editorial</h2>
+          <span className="muted">
+            {visiblePublications.filter(p=>p.status==='AGUARDANDO_PUBLICACAO_MANUAL').length} aguardando postagem ·{' '}
+            {visiblePublications.filter(p=>p.status==='PUBLICADO').length} publicados
+          </span>
+        </div>
+        <PublicationGroups publications={visiblePublications}
+          videos={[...editorialVideos.values()]} api={api} onOpenVideo={openVideo}
+          onChanged={refresh} onError={setError}/>
+        {orphanApproved.length>0&&<section className="approved-without-destinations">
+          <h3>Aprovados sem destino de publicação registrado ({orphanApproved.length})</h3>
+          <p className="muted">Os vídeos continuam aprovados no banco, mas não há registro de plataforma. Nenhuma publicação foi criada automaticamente.</p>
+          {orphanApproved.map(v=><button className="video-row" key={v.id}
+             onClick={()=>act(()=>openVideo(v),'Produção selecionada.')}>
+            <Film size={15}/><strong>{v.title}</strong>
+            <small>{approvalDay(v)||'Sem data de aprovação registrada'} · Revisar arquivo</small>
+          </button>)}
+        </section>}
+      </section>}
+      {tab==='Analytics'&&<>
+        <section className="panel analytics-collection">
+          <div className="section-title"><div><h2>Publicações e coleta de métricas</h2>
+            <p className="muted">O YouTube permite consultar visualizações, curtidas e comentários públicos; métricas privadas exigem autorização específica.</p>
+          </div><button disabled={busy}
+            onClick={()=>act(()=>api('analytics/refresh',{},'POST'),'Atualização de métricas colocada na fila do worker.')}>
+            <RefreshCw size={15}/> Reconsultar métricas
+          </button></div>
+          <p className="muted">{confirmedPublications.length} publicações confirmadas ·{' '}
+            {new Set(data.metrics.map(m=>m.publication_id)).size} com observações salvas.</p>
+          {confirmedPublications.length?<div className="table-wrap"><table>
+            <thead><tr><th>Publicação</th><th>Plataforma</th><th>Métricas</th><th>Diagnóstico</th></tr></thead>
+            <tbody>{confirmedPublications.map(p=>{
+              const samples=data.metrics.filter(m=>m.publication_id===p.id);
+              const check=data.metric_checks?.[p.id];
+              return <tr key={p.id}>
+                <td>{p.url?<a href={p.url} target="_blank" rel="noopener noreferrer">{p.title||p.url}</a>:
+                  p.title||p.video_id}</td>
+                <td>{p.platform}</td>
+                <td>{samples.length?'Observadas':'Ainda não observadas'}</td>
+                <td>{p.platform!=='youtube'?'Coleta automática não disponível para esta rede.':
+                  check?.reason||'Aguardando consulta da API do YouTube.'}</td>
+              </tr>;
+            })}</tbody></table></div>:
+            <p className="muted">Nenhum link confirmado como publicado até o momento.</p>}
+        </section>
+        <MetricChart metrics={data.metrics}/><div className="stats">{['views','likes','comments'].map(metric=>{const latest=new Map<string,Row>();for(const m of data.metrics)if(!latest.has(m.publication_id))latest.set(m.publication_id,m);const values=[...latest.values()].map(m=>JSON.parse(m.data)[metric]).filter(n=>n!=null);return <div className="stat" key={metric}><span>{{views:'Visualizações',likes:'Curtidas',comments:'Comentários'}[metric]}</span><strong>{values.length?values.reduce((a,b)=>a+b,0).toLocaleString('pt-BR'):'—'}</strong><small>{values.length?'Última coleta por publicação':'Sem métricas observadas'}</small></div>})}</div><section className="panel"><h2>Observações por publicação</h2>{data.metrics.length?<div className="table-wrap"><table><thead><tr><th>Data</th><th>Rede</th><th>Template</th><th>Views</th><th>Retenção</th></tr></thead><tbody>{data.metrics.map(m=>{const values=JSON.parse(m.data);return <tr key={m.id}><td>{date(m.observed)}</td><td>{m.platform}</td><td>{m.template}</td><td>{values.views??'—'}</td><td>{values.retention??'Indisponível'}</td></tr>})}</tbody></table></div>:<Empty title="Os dados chegam depois da publicação" detail="Métricas indisponíveis permanecem vazias. Nenhuma estimativa é apresentada como resultado real."/>}</section><button onClick={()=>act(async()=>{const report=await api('report');setHandoffs({relatorio:report});},'Relatório carregado.')}>Consultar relatório diário</button>{handoffs?.relatorio&&<pre>{handoffs.relatorio}</pre>}</>}
       {tab==='Agentes'&&<><div className="agent-cards">{data.agents.map(a=>{const last=data.events.find(e=>e.agent===a);return <section className="panel" key={a}><span className="cyan"><Users size={22}/></span><h2 className="capitalize">{a}</h2><p>{last?last.summary:'Nenhuma execução registrada.'}</p><small>{last?date(last.created):'Em espera'}</small></section>})}</div><section className="panel"><div className="section-title"><h2>Fila persistente</h2><button disabled={busy} onClick={()=>{if(window.confirm('Limpar somente jobs concluídos ou falhos? Jobs em fila serão preservados.'))act(()=>api('jobs/completed',{},'DELETE'),'Histórico de jobs finalizados limpo.')}}>Limpar concluídos</button></div><div className="table-wrap"><table><thead><tr><th>Job</th><th>Estado</th><th>Tentativas</th><th>Detalhes</th><th>Ações</th></tr></thead><tbody>{data.jobs.map(j=><tr key={j.id}><td>{j.kind}<small>{j.id.slice(0,8)}</small></td><td><Badge status={j.status}/></td><td>{j.attempts}/3</td><td>{j.error||'—'}</td><td><div className="actions"><button disabled={j.status==='RUNNING'} onClick={()=>act(()=>api('jobs/'+j.id+'/pause',{}),'Job pausado.')} aria-label="Pausar job"><Pause size={14}/></button><button disabled={j.status==='RUNNING'} onClick={()=>act(()=>api('jobs/'+j.id+'/retry',{}),'Job recolocado na fila.')} aria-label="Reexecutar job"><RefreshCw size={14}/></button></div></td></tr>)}</tbody></table></div>{!data.jobs.length&&<Empty title="Sem jobs na fila" detail="Importações e pesquisas geram tarefas persistentes."/>}</section><section className="panel"><h2>Orçamento interno de IA</h2><p className="muted">O teto de tokens é uma proteção do Studio, não a cota disponível no OmniRoute. As reservas são conciliadas com o consumo informado pelo provedor.</p>{data.usage.length?data.usage.map(u=><p key={u.day}>{u.day}: {u.tokens} tokens contabilizados · US$ {u.cost.toFixed(4)} estimados</p>):<p className="muted">Nenhuma chamada a modelos registrada.</p>}</section></>}
       {tab==='Configurações'&&<><TemplatePackagePanel token={token}/><CastPanel cast={data.cast||{}} token={token} api={api} refresh={refresh} onError={setError}/><section className="panel"><h2>Persona narradora — rádio Vice City</h2><p className="muted">Elenco original com avatares iniciais em assets/personas/. Personalize as vozes e os dossiers no painel acima; rumores continuam sujeitos ao Avaliador.</p>{personaEdit&&<form onSubmit={e=>{e.preventDefault();act(()=>api('persona',personaEdit,'PUT'),'Persona salva.')}}><div className="form-grid"><label>Personagem<select value={personaEdit.selected} onChange={e=>setPersonaEdit({...personaEdit,selected:e.target.value,
       overrides:{...personaOptions[e.target.value],name:undefined}})}>{Object.entries(personaOptions).map(([id,p])=><option key={id} value={id}>{(p as Row).name}</option>)}</select></label><label>Modelo Piper PT-BR (opcional)<input value={personaEdit.voice_model||''} placeholder="/models/pt_BR-cadu-medium.onnx" onChange={e=>setPersonaEdit({...personaEdit,voice_model:e.target.value})}/></label></div><p className="muted">{personaOptions[personaEdit.selected]?.look}</p><p>{personaOptions[personaEdit.selected]?.personality}</p><label>Imagem da persona<select value={personaEdit.image_path||''} onChange={e=>setPersonaEdit({...personaEdit,image_path:e.target.value})}><option value="">Sem imagem — selecione depois</option>{data.assets.filter(a=>a.kind==='persona'&&a.path&&a.rights_status==='AUTHORIZED').map(a=><option key={a.id} value={a.path}>{a.title}</option>)}</select></label><div className="form-grid"><label>Abertura<input value={personaEdit.overrides.opening||''} onChange={e=>setPersonaEdit({...personaEdit,overrides:{...personaEdit.overrides,opening:e.target.value}})}/></label><label>Encerramento<input value={personaEdit.overrides.closing||''} onChange={e=>setPersonaEdit({...personaEdit,overrides:{...personaEdit.overrides,closing:e.target.value}})}/></label></div>

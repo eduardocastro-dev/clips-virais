@@ -149,7 +149,7 @@ def test_radar_retains_stream_that_was_uploaded_before_thirty_day_window(monkeyp
     monkeypatch.setattr(viral_radar20,'stored_top_creators',lambda:{
         'channels':[{'channel_id':CHANNEL,'name':'Criador autorizado'}]})
     monkeypatch.setattr(viral_radar20,'public_channel_entries',
-        lambda channel,tab,limit=5:[{'id':'AAAA1234xyz'}] if tab=='streams' else [])
+        lambda channel,tab,limit=5:[{'id':'AAAA1234xyz','title':'Live GTA VI - evento recente'}] if tab=='streams' else [])
     monkeypatch.setattr(viral_radar20,'public_video_info',lambda url:info)
     result=viral_radar20.scan_recent()
     assert len(result['recent_lives'])==1

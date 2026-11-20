@@ -121,7 +121,7 @@ def _purge_one(video,reason):
         return {'id':ident,'pending':True,'error':'Arquivos em uso: '+', '.join(issues[:5])}
     # Older/manual discards still deserve feedback even when cleanup is the
     # first updated code path to see them. Never veto a failed technical job.
-    if reason=='manual':
+    if reason=='manual' and not db.get_setting('editorial_unblocked:'+ident,False):
         from backend.editorial_rejections import remember_manual
         remember_manual(video,when=float(video.get('discarded_at') or time.time()))
     # Foreign key order; removing media first avoids references to missing
@@ -148,6 +148,7 @@ def mark_discarded(video_id,reason='manual'):
         raise ValueError('Vídeo já aprovado ou publicado não pode ser descartado por esse fluxo.')
     if row.get('discarded_at'):
         if reason=='manual':
+            db.put_setting('editorial_unblocked:'+video_id,False)
             from backend.editorial_rejections import remember_manual
             remember_manual(row,when=float(row['discarded_at']))
         return {'id':video_id,'status':row['status'],'discarded_at':row['discarded_at']}
@@ -163,6 +164,7 @@ def mark_discarded(video_id,reason='manual'):
                    WHERE video_id=:id AND status!='PUBLICADO'""",{'id':video_id,'now':now})
     db.put_setting('video_cancel_requested:'+video_id,True)
     if reason=='manual':
+        db.put_setting('editorial_unblocked:'+video_id,False)
         from backend.editorial_rejections import remember_manual
         remember_manual(row,when=now)
     return {'id':video_id,'status':'DISCARDED','discarded_at':now,

@@ -435,24 +435,61 @@ def youtube_upload(path, script):
 
 
 def collect_metrics():
-    """Best-effort video statistics via configured API or anonymous fallback."""
-    for pub in db.rows("SELECT * FROM publications WHERE status='PUBLICADO' AND platform='youtube'"):
-        if db.cache_get('metrics:' + pub['id']):
+    """Observe real YouTube statistics; report why each link lacks metrics.
+
+    No invented values, and no automatic statistics for platforms without
+    a supported authenticated collector. The hourly cache limits API usage.
+    """
+    from backend.contracts import platform_url
+    from backend.youtube_data import configured
+    summary={'observed':0,'unavailable':0,'cached':0,'invalid':0}
+    publications=db.rows("""SELECT * FROM publications
+                        WHERE status='PUBLICADO' AND platform='youtube'""")
+    for pub in publications:
+        if db.cache_get('metrics:'+pub['id']):
+            summary['cached']+=1
             continue
-        url=pub.get('url') or ''
-        if not url.startswith(('https://www.youtube.com/','https://youtube.com/')):
+        url=(pub.get('url') or '').strip()
+        if not url and re.fullmatch(r'[A-Za-z0-9_-]{11}',str(pub.get('external_id') or '')):
+            url='https://www.youtube.com/watch?v='+pub['external_id']
+        try:
+            platform,url=platform_url(url)
+            if platform!='youtube':
+                raise ValueError('link não pertence ao YouTube')
+        except ValueError:
+            summary['invalid']+=1
+            db.put_setting('metrics_check:'+pub['id'],{
+                'status':'invalid_url','reason':'URL publicada ausente ou inválida.',
+                'checked_at':time.time()})
             continue
         try:
+            # Discovery metadata can be cached for six hours. Published
+            # engagement needs an independent fresh observation.
+            db.execute('DELETE FROM cache WHERE key=:key',{'key':'metadata:'+url})
             result=public_youtube_metadata(url)
-        except IntegrationError:
-            continue
-        counts=result.get('metrics',{})
-        if not counts or 'viewCount' not in counts:
-            continue
-        data={'views':counts.get('viewCount'),'likes':counts.get('likeCount'),
-              'comments':counts.get('commentCount'),
-              'shares':None,'retention':None,'ctr':None,
-              'average_watch_seconds':None,'follower_growth':None}
-        db.execute('INSERT INTO metrics VALUES (:id,:pub,:now,:data)',
-                   dict(id=db.uid(),pub=pub['id'],now=time.time(),data=json.dumps(data)))
-        db.cache_set('metrics:' + pub['id'],True,3600)
+            counts=result.get('metrics') or {}
+            if counts.get('viewCount') is None:
+                raise IntegrationError('O YouTube não retornou contagens públicas para este vídeo.')
+            data={'views':int(counts['viewCount']),
+                  'likes':int(counts['likeCount']) if counts.get('likeCount') is not None else None,
+                  'comments':int(counts['commentCount']) if counts.get('commentCount') is not None else None,
+                  'shares':None,'retention':None,'ctr':None,
+                  'average_watch_seconds':None,'follower_growth':None}
+            db.execute('INSERT INTO metrics VALUES (:id,:pub,:now,:data)',
+                       dict(id=db.uid(),pub=pub['id'],now=time.time(),data=json.dumps(data)))
+            db.cache_set('metrics:'+pub['id'],True,3600)
+            db.put_setting('metrics_check:'+pub['id'],{
+                'status':'observed','reason':'Métricas públicas consultadas com sucesso.',
+                'checked_at':time.time(),'source':result.get('metadata_source','public')})
+            summary['observed']+=1
+        except (IntegrationError,ValueError,TypeError) as exc:
+            summary['unavailable']+=1
+            # Never expose API keys or HTTP URLs in a persisted error message.
+            reason=('API configurada: verifique a chave, cota ou visibilidade do vídeo.'
+                    if configured() else
+                    'Estatísticas públicas indisponíveis; conecte a API YouTube Data v3.')
+            db.put_setting('metrics_check:'+pub['id'],{
+                'status':'unavailable','reason':reason,
+                'checked_at':time.time()})
+    db.put_setting('last_metrics_collection',{'at':time.time(),**summary})
+    return summary

@@ -60,6 +60,11 @@ def test_auto_queue_continues_past_manual_review_until_daily_limit(client, monke
     videos=db.rows('SELECT id,status FROM videos ORDER BY created')
     assert len(videos)==2
     assert db.production_usage()==2
+    # Both canonicalized URLs must be different. Raw /shorts/ links should
+    # not be enqueued again while an earlier item waits for human review.
+    urls=db.rows('SELECT url FROM videos ORDER BY created')
+    assert len({item['url'] for item in urls})==2
+    assert all('/watch?v=' in item['url'] for item in urls)
     assert db.rows('SELECT status FROM videos WHERE id=:id',{'id':first})[0]['status']=='AWAITING_MANUAL_DECISION'
 
     # A queued worker can still complete a different Short; the parked one is

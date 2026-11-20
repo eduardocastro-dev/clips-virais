@@ -181,16 +181,27 @@ def queue_opportunities():
     if not config.automatic:
         return
     for opportunity in prioritized_opportunities(limit=30):
-        if db.rows('SELECT id FROM videos WHERE url=:url', {'url':opportunity['url']}):
-            continue
         try:
             if db.production_usage() >= config.daily_limit:
                 break
             if opportunity['platform']=='news':
-                created_id=create_video(reference=json.loads(opportunity['metadata']))
+                reference=json.loads(opportunity['metadata'])
+                canonical_url=reference['url']
             else:
                 recommended=db.get_setting('recommendations', {}).get('template') or 'gta-news'
-                created_id=create_video(ImportRequest(url=opportunity['url'],duration=db.settings().duration,template=recommended))
+                import_request=ImportRequest(
+                    url=opportunity['url'], duration=config.duration, template=recommended)
+                # Shorts are stored as youtube.com/watch?v=ID by ImportRequest.
+                # Comparing a raw /shorts/ URL with that value would repeatedly
+                # select the same job and starve every remaining opportunity.
+                canonical_url=import_request.url
+            if db.rows('SELECT id FROM videos WHERE url=:canonical OR url=:original',
+                       {'canonical':canonical_url,'original':opportunity['url']}):
+                continue
+            if opportunity['platform']=='news':
+                created_id=create_video(reference=reference)
+            else:
+                created_id=create_video(import_request)
             # Only automatically queued Shorts participate in quota's 3-attempt policy.
             db.put_setting('quota_auto_shorts:'+created_id, True)
             db.log_event(None, 'worker', 'AUTO_QUEUE', f'Oportunidade enfileirada automaticamente: {opportunity["url"]}')

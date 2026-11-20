@@ -206,6 +206,23 @@
 .rights-preview-card button:disabled{opacity:.5;cursor:not-allowed}
 
 
+/* Video Studio: separate production modes with live worker status */
+.studio-mode-switcher{display:grid;gap:13px;margin-bottom:16px;padding:14px 16px}
+.studio-mode-tabs{display:flex;align-items:stretch;flex-wrap:wrap;gap:10px}
+.studio-mode-tabs>button{display:inline-flex;align-items:center;gap:9px;border:1px solid var(--border);background:#131f2b;color:var(--muted);padding:12px 16px;border-radius:9px;font-weight:700;min-height:44px}
+.studio-mode-tabs>button:hover{border-color:#438a93;color:var(--text)}
+.studio-mode-tabs>button.active{border-color:#39bcb6;color:var(--text);background:#163039}
+.studio-mode-tabs>button:focus-visible{outline:2px solid var(--cyan);outline-offset:3px}
+.studio-tab-indicator{display:inline-flex;align-items:center;gap:6px;font-size:10px;font-weight:600;color:#83e8c6;white-space:nowrap}
+.studio-pulse,.studio-idle-dot{display:inline-block;flex-shrink:0;width:8px;height:8px;background:#55dfb5;border-radius:50%}
+.studio-pulse{box-shadow:0 0 0 0 rgba(85,223,181,.38);animation:studio-status-pulse 1.7s ease-out infinite}
+.studio-idle-dot{background:#718298}
+.studio-activity-status{display:flex;align-items:center;gap:9px;min-height:22px;color:#a6b9c9;font-size:12px;line-height:1.5}
+.studio-activity-status strong{color:var(--text);margin-right:6px}
+@keyframes studio-status-pulse{0%{box-shadow:0 0 0 0 rgba(85,223,181,.38)}75%,100%{box-shadow:0 0 0 8px rgba(85,223,181,0)}}
+@media(prefers-reduced-motion:reduce){.studio-pulse{animation:none}}
+@media(max-width:560px){.studio-mode-tabs{display:grid;grid-template-columns:1fr}.studio-mode-tabs>button{justify-content:flex-start}.studio-activity-status{align-items:flex-start}}
+
 /* Live Studio — a source live and its three independent approved outputs */
 .live-studio .section-title h2{display:flex;align-items:center;gap:9px}
 .live-production{background:#0f1a27;border:1px solid #304753;border-radius:10px;margin:18px 0;padding:17px}

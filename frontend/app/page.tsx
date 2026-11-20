@@ -26,6 +26,8 @@ function Empty({title,detail,action}:{title:string;detail:string;action?:React.R
 export default function Home(){
   const [token,setToken]=useState('');const [authenticated,setAuthenticated]=useState(false);
   const [tab,setTab]=useState('Dashboard'); const [data,setData]=useState<State|null>(null);
+  const [studioMode,setStudioMode]=useState<'shorts'|'lives'>('shorts');
+  const [activeLive,setActiveLive]=useState<{id:string;title:string}|null>(null);
   const [error,setError]=useState('');const [notice,setNotice]=useState('');const [busy,setBusy]=useState(false);
   const [settings,setSettings]=useState<Row|null>(null); const [selected,setSelected]=useState<Row|null>(null);
   const [sourceRightsEvidence,setSourceRightsEvidence]=useState('');
@@ -43,6 +45,23 @@ export default function Home(){
     return r.headers.get('content-type')?.includes('application/json')?r.json():r.text();
   },[token]);
   const refresh=useCallback(async()=>{const d=await api('state');setData(d);setAuthenticated(true);return d},[api]);
+  const updateActiveLive=useCallback((live:{id:string;title:string}|null)=>{
+    setActiveLive(previous=>previous?.id===live?.id?previous:live);
+  },[]);
+  useEffect(()=>{
+    if(!authenticated||tab!=='Video Studio'||studioMode!=='shorts')return;
+    let alive=true;
+    const poll=async()=>{
+      try{
+        const response=await api('live-clips');
+        const running=(response.items||[]).find((live:Row)=>live.job?.status==='RUNNING');
+        if(alive)updateActiveLive(running?{id:running.id,title:running.title}:null);
+      }catch{if(alive)updateActiveLive(null)}
+    };
+    void poll();
+    const timer=setInterval(()=>void poll(),5000);
+    return()=>{alive=false;clearInterval(timer)};
+  },[authenticated,tab,studioMode,api,updateActiveLive]);
   useEffect(()=>{if(!authenticated)return;const timer=setInterval(()=>refresh().catch(e=>setError(e.message)),5000);return()=>clearInterval(timer)},[authenticated,refresh]);
   useEffect(()=>()=>{if(preview)URL.revokeObjectURL(preview)},[preview]);
   async function act(fn:()=>Promise<any>,message='Ação concluída.'){setBusy(true);setError('');try{await fn();await refresh();setNotice(message)}catch(e){setError((e as Error).message)}finally{setBusy(false)}}
@@ -58,7 +77,7 @@ export default function Home(){
     setPreviewError(detail);
   }
   async function openVideo(v:Row){
-    setSelected(v);setAudioTimeline(null);setPoseTimeline([]);setTab('Video Studio');setPreview('');setHandoffs(null);setAttempts([]);setPreviewError('');
+    setSelected(v);setAudioTimeline(null);setPoseTimeline([]);setStudioMode('shorts');setTab('Video Studio');setPreview('');setHandoffs(null);setAttempts([]);setPreviewError('');
     const result=await api('videos/'+v.id+'/attempts');const all:Row[]=result.attempts||[];
     setAttempts(all);
     const lastRendered=[...all].reverse().find(a=>a.render_available);
@@ -98,6 +117,9 @@ export default function Home(){
   if(!authenticated)return <main className="login"><div className="login-brand"><Clapperboard/><span>GTA<span className="cyan">STUDIO</span></span></div><div className="login-card"><span className="eyebrow">CENTRAL DE PRODUÇÃO / ACESSO LOCAL</span><h1>Seu próximo vídeo<br/>começa aqui.</h1><p>Entre com o token definido em <code>STUDIO_TOKEN</code> para acessar seu estúdio pessoal.</p><form onSubmit={e=>{e.preventDefault();act(refresh,'Estúdio conectado.')}}><label>Token de acesso<input autoFocus type="password" required value={token} onChange={e=>setToken(e.target.value)} autoComplete="current-password"/></label><button className="primary" disabled={busy}>{busy?<LoaderCircle className="spin" size={18}/>:<ArrowUpRight size={18}/>} Acessar estúdio</button></form>{error&&<p role="alert" className="error">{error}</p>}<small>Credenciais permanecem nesta sessão do navegador.</small></div><p className="login-foot">PESSOAL · SELF-HOSTED · PT-BR</p></main>;
   if(!data)return <main className="login" aria-busy="true"><LoaderCircle className="spin"/>Carregando estúdio…</main>;
   const active=data.videos.find(v=>v.status==='PROCESSING');const pending=data.publications.filter(p=>p.status==='AGUARDANDO_PUBLICACAO_MANUAL');
+  const currentShortJob=data.jobs.find(job=>job.status==='RUNNING'&&job.video_id&&
+    !String(job.kind||'').startsWith('live_cut:'));
+  const currentShort=data.videos.find(v=>v.id===currentShortJob?.video_id);
   const pendingVideoCount=groupPublications(pending,data.videos).length;
   const counts=[{name:'Vídeos produzidos',value:data.videos.filter(v=>v.final_path).length,note:'Arquivos renderizados',icon:Film},{name:'Postados manualmente',value:data.publications.filter(p=>p.status==='PUBLICADO').length,note:'Confirmados por você',icon:Globe2},{name:'Na fila manual',value:pendingVideoCount,note:'Vídeos com postagem pendente',icon:Clapperboard},{name:'Falhas de produção',value:data.videos.filter(v=>v.status==='FAILED').length,note:'Consulte os jobs',icon:Activity}];
   return <div className="shell"><aside className="sidebar"><a className="brand" href="#" onClick={()=>setTab('Dashboard')}><span className="brand-icon"><Clapperboard size={22}/></span><span>GTA<span className="cyan">STUDIO</span><small>AUTONOMOUS CONTENT</small></span></a><div className="workspace"><span className="avatar">VI</span><div>{data.settings.channel}<small>Estúdio pessoal</small></div><ShieldCheck size={16}/></div><p className="nav-label">WORKSPACE</p><nav aria-label="Navegação principal">{tabs.map(t=><button key={t.name} className={tab===t.name?'active':''} onClick={()=>{setTab(t.name);if(t.name==='Configurações'){setSettings({...data.settings});loadPersona().catch(e=>setError(e.message))}}}><t.icon size={18}/><span>{t.name}</span>{t.name==='Prontos para postar'&&pendingVideoCount>0&&<b>{pendingVideoCount}</b>}</button>)}</nav><div className="sidebar-bottom"><div className="system-status"><i className={data.worker_online?'online':''}/>{data.worker_online?'Worker conectado':'Worker desconectado'}</div><small>{data.agents.length} agentes · produção em PT-BR</small><button onClick={()=>{setAuthenticated(false);setToken('');setData(null)}}>Encerrar sessão <ArrowUpRight size={14}/></button></div></aside>
@@ -117,7 +139,32 @@ export default function Home(){
           </form>
           {data.sources.map(src=><div className="list-row" key={src.id}><div><strong>{src.name}</strong><small>{src.error||src.url}</small></div><button onClick={()=>act(()=>api('sources/'+src.id+'/scan',{}),'Consulta RSS agendada.')}>Consultar</button></div>)}
         </section></>}
-       {tab==='Video Studio'&&<><LiveStudioPanel token={token} embedded/><div className="studio-grid"><section className="panel">
+       {tab==='Video Studio'&&<>
+        <section className="panel studio-mode-switcher" aria-label="Fluxos do Video Studio">
+          <div className="studio-mode-tabs" role="tablist" aria-label="Tipo de produção">
+            <button type="button" role="tab" aria-selected={studioMode==='shorts'}
+              className={studioMode==='shorts'?'active':''} onClick={()=>setStudioMode('shorts')}>
+              <Clapperboard size={16}/> Shorts
+              {currentShort&&<span className="studio-tab-indicator"><span className="studio-pulse"/>Em execução</span>}
+            </button>
+            <button type="button" role="tab" aria-selected={studioMode==='lives'}
+              className={studioMode==='lives'?'active':''} onClick={()=>setStudioMode('lives')}>
+              <Film size={16}/> Cortes de Lives
+              {activeLive&&<span className="studio-tab-indicator"><span className="studio-pulse"/>Em execução</span>}
+            </button>
+          </div>
+          <div className="studio-activity-status" role="status" aria-live="polite">
+            {(currentShort||activeLive)?<>
+              <span className="studio-pulse" aria-hidden="true"/>
+              <span><strong>Trabalhando agora:</strong>{currentShort&&<> Shorts · {currentShort.title}</>}
+                {currentShort&&activeLive?' | ':null}
+                {activeLive&&<> Cortes de Lives · {activeLive.title}</>}
+              </span>
+            </>:<><span className="studio-idle-dot" aria-hidden="true"/>Nenhuma produção em execução agora.</>}
+          </div>
+        </section>
+        {studioMode==='lives'?<LiveStudioPanel token={token} embedded onActivityChange={updateActiveLive}/>:
+        <><div className="studio-grid"><section className="panel">
          <div className="section-title"><h2>Pré-visualização</h2>{selected&&<Badge status={selected.status}/>}</div>
          <button type="button" onClick={()=>setShowShortsZones(v=>!v)}>{showShortsZones?'Ocultar':'Mostrar'} zonas seguras do Shorts</button>
          <div className="preview-safe-shell">
@@ -187,7 +234,7 @@ export default function Home(){
   onError={setError}/></div></div>
         <p className="muted">Limite diário: {data.daily_production_usage}/{data.settings.daily_limit} produções reais ativas ou aprovadas hoje (São Paulo).</p>
         {data.videos.length?Object.entries(data.videos.reduce((acc:Record<string,Row[]>,v:Row)=>{const day=new Date(v.created*1000).toLocaleDateString('pt-BR');acc[day]=acc[day]||[];acc[day].push(v);return acc},{})).map(([day,items])=><div key={day}><h3 className="muted" style={{fontSize:'0.85rem',margin:'12px 0 6px'}}>{day}</h3>{items.map(v=><button className="video-row" key={v.id} onClick={()=>act(()=>openVideo(v),'Produção selecionada.')}><span className="video-thumb"><Film/></span><div><strong>{v.title}</strong><small>{date(v.created)} {v.test?'· TESTE':''}</small></div><Badge status={v.status}/></button>)}</div>):<Empty title="Nenhuma produção" detail="Importe uma URL ou execute um teste técnico."/>}</section></div>
-      <section className="panel"><h2>Templates do estúdio</h2><div className="template-grid">{Object.entries(data.templates).map(([id,t])=><button className={`template-card ${templateId===id?'selected':''}`} key={id} style={{borderTopColor:t.accent.replace('0x','#')}} onClick={()=>{setTemplateId(id);setTemplateEdit({background:t.background,accent:t.accent,font_size:t.font_size})}}><Film size={22}/><strong>{t.name}</strong><small>Texto animado · narração · vertical</small></button>)}</div><form className="inline-form" onSubmit={e=>{e.preventDefault();act(()=>api('templates/'+templateId,templateEdit,'PUT'),'Template atualizado.')}}><label>Fundo<input type="color" value={templateEdit.background.replace('0x','#')} onChange={e=>setTemplateEdit({...templateEdit,background:e.target.value.replace('#','0x')})}/></label><label>Acento<input type="color" value={templateEdit.accent.replace('0x','#')} onChange={e=>setTemplateEdit({...templateEdit,accent:e.target.value.replace('#','0x')})}/></label><label>Fonte (px)<input type="number" min={36} max={72} value={templateEdit.font_size} onChange={e=>setTemplateEdit({...templateEdit,font_size:+e.target.value})}/></label><button>Salvar template</button></form></section></>}
+      <section className="panel"><h2>Templates do estúdio</h2><div className="template-grid">{Object.entries(data.templates).map(([id,t])=><button className={`template-card ${templateId===id?'selected':''}`} key={id} style={{borderTopColor:t.accent.replace('0x','#')}} onClick={()=>{setTemplateId(id);setTemplateEdit({background:t.background,accent:t.accent,font_size:t.font_size})}}><Film size={22}/><strong>{t.name}</strong><small>Texto animado · narração · vertical</small></button>)}</div><form className="inline-form" onSubmit={e=>{e.preventDefault();act(()=>api('templates/'+templateId,templateEdit,'PUT'),'Template atualizado.')}}><label>Fundo<input type="color" value={templateEdit.background.replace('0x','#')} onChange={e=>setTemplateEdit({...templateEdit,background:e.target.value.replace('#','0x')})}/></label><label>Acento<input type="color" value={templateEdit.accent.replace('0x','#')} onChange={e=>setTemplateEdit({...templateEdit,accent:e.target.value.replace('#','0x')})}/></label><label>Fonte (px)<input type="number" min={36} max={72} value={templateEdit.font_size} onChange={e=>setTemplateEdit({...templateEdit,font_size:+e.target.value})}/></label><button>Salvar template</button></form></section></>}</>}
       {tab==='Upload de mídia'&&<MediaUpload token={token} maxMb={data.settings.upload_max_mb||1024} onFinished={refresh}/>}
       {tab==='Cortes de Lives'&&<RadarOps token={token} mode="cuts"/>}
       {tab==='Biblioteca de assets'&&<AssetLibrary assets={data.assets} token={token} api={api} refresh={refresh} onError={setError}/>}

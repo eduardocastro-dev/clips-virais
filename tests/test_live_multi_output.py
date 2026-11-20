@@ -243,3 +243,58 @@ def test_existing_cut_from_old_intro_policy_is_not_silently_reused():
                {'id':child})
     with pytest.raises(IntegrationError,match='Reprocesse a live'):
         live_clip_render._validated_output(clip,1,new_choice)
+
+
+def test_discarded_live_cut_deletes_own_files_and_disappears_from_studio(client):
+    parent=_parent(status='REVIEW_PENDING')
+    ids=[_output(parent,i) for i in (1,2,3)]
+    first=db.rows('SELECT * FROM live_clip_outputs WHERE id=:id',{'id':ids[0]})[0]
+    first_file=db.safe_file(first['file_path'])
+    cover=first_file.with_name('cover-01.jpg')
+    metadata=first_file.with_name('metadata-01.json')
+    cover.write_bytes(b'cover')
+    metadata.write_text('{"title":"Corte 1"}',encoding='utf-8')
+    db.execute("""UPDATE live_clip_outputs SET cover_path=:cover,metadata_path=:metadata
+                  WHERE id=:id""",
+               {'cover':str(cover.relative_to(db.ROOT)),
+                'metadata':str(metadata.relative_to(db.ROOT)),'id':ids[0]})
+    db.execute("""UPDATE live_clips SET file_path=:file,score=85,
+                  segment_start=80,segment_end=110 WHERE id=:id""",
+               {'file':first['file_path'],'id':parent})
+
+    response=client.post(f'/api/live-clips/{parent}/outputs/{ids[0]}/decision',
+                         json={'decision':'discard'})
+    assert response.status_code==200
+    assert response.json()['status']=='DISCARDED'
+    assert len(response.json()['removed_files'])==3
+    assert not first_file.exists() and not cover.exists() and not metadata.exists()
+    sibling=db.rows('SELECT * FROM live_clip_outputs WHERE id=:id',{'id':ids[1]})[0]
+    assert db.safe_file(sibling['file_path']).exists()
+    tombstone=db.rows('SELECT * FROM live_clip_outputs WHERE id=:id',{'id':ids[0]})[0]
+    assert tombstone['status']=='DISCARDED'
+    assert not tombstone['file_path'] and not tombstone['cover_path'] and not tombstone['metadata_path']
+    parent_row=db.rows('SELECT file_path FROM live_clips WHERE id=:id',{'id':parent})[0]
+    assert parent_row['file_path']==sibling['file_path']
+    items=client.get('/api/live-clips').json()['items']
+    group=next(item for item in items if item['id']==parent)
+    assert [cut['id'] for cut in group['outputs']]==ids[1:]
+    assert group['completed_cuts']==3
+    assert group['discarded_cuts']==1
+    assert client.get(f'/api/live-clips/{parent}/outputs/{ids[0]}/file').status_code==404
+    assert client.get(f'/api/live-clips/{parent}/outputs/{ids[0]}/metadata').status_code==404
+    assert client.post(f'/api/live-clips/{parent}/outputs/{ids[0]}/decision',
+                       json={'decision':'discard'}).status_code==200
+
+
+def test_fully_discarded_live_disappears_but_audit_is_preserved(client):
+    parent=_parent(status='REVIEW_PENDING')
+    ids=[_output(parent,i) for i in (1,2,3)]
+    for child in ids:
+        result=client.post(f'/api/live-clips/{parent}/outputs/{child}/decision',
+                           json={'decision':'discard'})
+        assert result.status_code==200
+    assert db.rows('SELECT status FROM live_clips WHERE id=:id',
+                   {'id':parent})[0]['status']=='DISCARDED'
+    assert db.rows('SELECT COUNT(*) AS n FROM live_clip_outputs WHERE parent_id=:id',
+                   {'id':parent})[0]['n']==3
+    assert parent not in [item['id'] for item in client.get('/api/live-clips').json()['items']]

@@ -285,3 +285,15 @@
 .cleanup-confirm-inner p{line-height:1.65}
 .cleanup-confirm-inner .actions{display:flex;justify-content:flex-end;gap:12px}
 @media(max-width:900px){.youtube-integrations-grid{grid-template-columns:1fr}}
+
+
+/* Approval-date calendar and published editorial archive */
+button.calendar-day{display:block;width:100%;text-align:left;background:transparent;color:var(--text);cursor:pointer;min-width:90px}
+button.calendar-day:hover{border-color:var(--cyan);background:#142630}
+button.calendar-day.selected{border-color:var(--cyan);background:#17343a;box-shadow:0 0 0 1px rgba(82,223,219,.28)}
+button.calendar-day:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+.approved-without-destinations{margin-top:22px;border-top:1px solid var(--border);padding-top:15px}
+.approved-without-destinations .video-row{width:100%;text-align:left}
+.analytics-collection{margin-bottom:18px}
+.analytics-collection .table-wrap{max-height:400px;overflow-y:auto}
+.analytics-collection td{vertical-align:top;max-width:340px;overflow-wrap:anywhere}

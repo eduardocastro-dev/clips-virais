@@ -32,7 +32,8 @@ function taskKind(job:Job){
 function CurrentJob({job,onOpenAgents,onOpenLiveCuts}:{
   job:Job;onOpenAgents:()=>void;onOpenLiveCuts:()=>void
 }){
-  const current=job.stages.findIndex(s=>s.id===job.stage);
+  const current=job.stages.findIndex(s=>
+    s.id===job.stage||Boolean(job.stage?.startsWith(s.id+'_')));
   const stale=job.since_last_step_seconds!==null&&job.since_last_step_seconds>=300;
   return <article className="ops-current" key={job.id}>
     <div className="ops-current-head">

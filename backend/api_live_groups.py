@@ -20,17 +20,26 @@ def grouped_lives():
     mapping={}
     for child in children:
         mapping.setdefault(child['parent_id'],[]).append(child)
+    visible=[]
     for parent in parents:
-        parent['outputs']=mapping.get(parent['id'],[])
-        parent['completed_cuts']=sum(bool(x['file_path']) and x['status'] in
-             ('REVIEW_PENDING','APPROVED','DISCARDED') for x in parent['outputs'])
-        parent['approved_cuts']=sum(x['status']=='APPROVED' for x in parent['outputs'])
+        all_outputs=mapping.get(parent['id'],[])
+        # Discard is an audit tombstone, never a deliverable in Video Studio.
+        parent['outputs']=[x for x in all_outputs if x['status']!='DISCARDED']
+        if parent['status']=='DISCARDED' and not parent['outputs']:
+            continue
+        # Keep progress honest: decisions made still count toward 3 reviewed
+        # cuts even if their MP4s are subsequently discarded and removed.
+        parent['completed_cuts']=sum(x['status'] in
+             ('REVIEW_PENDING','APPROVED','DISCARDED') for x in all_outputs)
+        parent['approved_cuts']=sum(x['status']=='APPROVED' for x in all_outputs)
+        parent['discarded_cuts']=sum(x['status']=='DISCARDED' for x in all_outputs)
         # Legacy finished lives keep their original count, new jobs always target >=3.
         parent['expected_cuts']=max(3,int(parent.get('cut_target') or 3))
         jobs=db.rows("""SELECT status,attempts,error FROM jobs WHERE kind=:kind
                          ORDER BY due DESC LIMIT 1""",{'kind':'live_cut:'+parent['id']})
         parent['job']=jobs[0] if jobs else None
-    return {'items':parents}
+        visible.append(parent)
+    return {'items':visible}
 
 
 def _output(parent_id:str,output_id:str):
@@ -53,6 +62,46 @@ def _validated_path(raw:str,extension:str='.mp4'):
     return path
 
 
+def _remove_discarded_media(parent_id: str, child: dict) -> list[str]:
+    """Remove only this output's unshared files, retaining its DB audit row.
+
+    Every path must resolve within this live's final output directory. If
+    deletion fails, keep the corresponding path in the DB for later cleanup.
+    """
+    folder=(db.ROOT/'videos'/'final'/'live_cuts'/parent_id).resolve()
+    removed=[]
+    cleared=[]
+    for key,extension in (('file_path','.mp4'),('cover_path','.jpg'),
+                          ('metadata_path','.json')):
+        raw=child.get(key)
+        if not raw:
+            continue
+        try:
+            path=db.safe_file(raw)
+        except ValueError:
+            continue
+        if not path.is_relative_to(folder) or path.suffix.lower()!=extension:
+            continue
+        others=db.rows("""SELECT id FROM live_clip_outputs WHERE id!=:id
+                        AND (file_path=:path OR cover_path=:path OR metadata_path=:path)
+                        LIMIT 1""",{'id':child['id'],'path':raw})
+        if others:
+            continue
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            db.log_event(None,'live_cuts','CUT_CLEANUP_FAILED',
+                         f"Corte {child['id']}: {key}: {str(exc)[:200]}")
+            continue
+        removed.append(raw)
+        cleared.append(key)
+    if cleared:
+        assignments=', '.join(key+'=NULL' for key in cleared)
+        db.execute('UPDATE live_clip_outputs SET '+assignments+' WHERE id=:id',
+                   {'id':child['id']})
+    return removed
+
+
 class OutputDecision(BaseModel):
     decision:str=Field(pattern=r'^(approve|discard)$')
 
@@ -63,6 +112,8 @@ def decide_output(parent_id:str,output_id:str,body:OutputDecision):
     parent,child=_output(parent_id,output_id)
     if child['status']=='APPROVED' and body.decision=='approve':
         return {'status':'APPROVED'}
+    if child['status']=='DISCARDED' and body.decision=='discard':
+        return {'status':'DISCARDED','removed_files':_remove_discarded_media(parent_id,child)}
     if child['status']!='REVIEW_PENDING':
         raise HTTPException(409,'Somente cortes aguardando revisão podem receber decisão.')
     if body.decision=='approve':
@@ -78,17 +129,36 @@ def decide_output(parent_id:str,output_id:str,body:OutputDecision):
         new_state='APPROVED' if any(x['status']=='APPROVED' for x in children) else 'DISCARDED'
         db.execute("""UPDATE live_clips SET status=:state,updated=:now WHERE id=:id""",
                    {'state':new_state,'now':now,'id':parent_id})
+    removed_files=[]
+    if status=='DISCARDED':
+        # The legacy parent points to the first cut. Avoid a stale link when
+        # that cut is discarded; choose another valid output if available.
+        if parent.get('file_path')==child.get('file_path'):
+            remaining=db.rows("""SELECT file_path,score,segment_start,segment_end
+                        FROM live_clip_outputs WHERE parent_id=:parent
+                        AND status IN ('REVIEW_PENDING','APPROVED')
+                        AND file_path IS NOT NULL ORDER BY ordinal LIMIT 1""",
+                        {'parent':parent_id})
+            survivor=remaining[0] if remaining else {}
+            db.execute("""UPDATE live_clips SET file_path=:file,score=:score,
+                         segment_start=:start,segment_end=:end WHERE id=:id""",
+                       {'id':parent_id,'file':survivor.get('file_path'),
+                        'score':survivor.get('score'),
+                        'start':survivor.get('segment_start'),
+                        'end':survivor.get('segment_end')})
+        removed_files=_remove_discarded_media(parent_id,child)
     record_right(parent['video_id'],parent['channel_id'],status,
                  'Revisão manual do corte '+str(child['ordinal'])+' / '+output_id)
     db.log_event(None,'live_cuts','CUT_DECISION',
                  f'{parent["title"]}: corte {child["ordinal"]} {status}')
-    return {'status':status,'parent_id':parent_id,'output_id':output_id}
+    return {'status':status,'parent_id':parent_id,'output_id':output_id,
+            'removed_files':removed_files}
 
 
 @router.get('/live-clips/{parent_id}/outputs/{output_id}/file')
 def get_output_file(parent_id:str,output_id:str):
     _,child=_output(parent_id,output_id)
-    if child['status'] not in ('REVIEW_PENDING','APPROVED','DISCARDED'):
+    if child['status'] not in ('REVIEW_PENDING','APPROVED'):
         raise HTTPException(404,'Corte ainda não validado.')
     path=_validated_path(child['file_path'])
     return FileResponse(path,media_type='video/mp4',
@@ -98,6 +168,8 @@ def get_output_file(parent_id:str,output_id:str):
 @router.get('/live-clips/{parent_id}/outputs/{output_id}/metadata')
 def get_output_metadata(parent_id:str,output_id:str):
     _,child=_output(parent_id,output_id)
+    if child['status'] not in ('REVIEW_PENDING','APPROVED'):
+        raise HTTPException(404,'Corte descartado ou indisponível.')
     if child['metadata_path']:
         path=_validated_path(child['metadata_path'],'.json')
         return json.loads(path.read_text('utf-8'))

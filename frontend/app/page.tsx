@@ -11,6 +11,7 @@ import LiveStudioPanel from './live-studio-panel';
 import YouTubeIntegrations from './youtube-integrations';
 import TemplatePackagePanel from './template-package-panel';
 import VideoCleanupPanel from './video-cleanup-panel';
+import EditorialRejectionsPanel from './editorial-rejections-panel';
 import OperationsMonitor from './operations-monitor';
 import PublicationGroups, {groupPublications} from './publication-groups';
 import {Activity, ArrowUpRight, Bell, CheckCircle2, ChevronRight, Clapperboard, Download, Film, Gauge, Globe2, Import, LayoutDashboard, LoaderCircle, Pause, Play, Plus, Radar, RefreshCw, Settings2, ShieldCheck, Square, Users, X} from 'lucide-react';
@@ -173,7 +174,7 @@ export default function Home(){
           </div>
         </section>
         {studioMode==='lives'?<LiveStudioPanel token={token} embedded onActivityChange={updateActiveLive}/>:
-        <><div className="studio-grid"><section className="panel">
+        <><EditorialRejectionsPanel token={token}/><div className="studio-grid"><section className="panel">
          <div className="section-title"><h2>Pré-visualização</h2>{selected&&<Badge status={selected.status}/>}</div>
          <button type="button" onClick={()=>setShowShortsZones(v=>!v)}>{showShortsZones?'Ocultar':'Mostrar'} zonas seguras do Shorts</button>
          <div className="preview-safe-shell">

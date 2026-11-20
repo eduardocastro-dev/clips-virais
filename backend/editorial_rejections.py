@@ -38,6 +38,12 @@ def normalize_source(value: str | None) -> str:
     if not url or url.startswith('test:'):
         return ''
     try:
+        from backend.public_youtube import video_id_from_url
+        ident=video_id_from_url(url)
+        return 'https://www.youtube.com/watch?v='+ident
+    except ValueError:
+        pass
+    try:
         from backend.contracts import platform_url
         return platform_url(url)[1]
     except ValueError:
@@ -100,7 +106,10 @@ def _legacy_import() -> None:
         ident=str(item.get('id') or '')
         if not re.fullmatch(r'[a-f0-9]{32}',ident):
             continue
-        created=float(item.get('discarded_at') or item.get('deleted_at') or now)
+        try:
+            created=float(item.get('discarded_at') or item.get('deleted_at') or now)
+        except (ValueError,TypeError):
+            continue
         if created+COOLDOWN_SECONDS<=now:
             continue
         db.execute("""INSERT OR IGNORE INTO editorial_rejections

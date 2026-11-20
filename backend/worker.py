@@ -49,6 +49,8 @@ def cleanup():
                     target = (db.ROOT / p['output_path']).resolve()
                     if target.is_relative_to((db.ROOT / 'output').resolve()) and target.is_file():
                         target.unlink()
+    from backend.api_live_groups import purge_discarded_live_media
+    purge_discarded_live_media()
     from backend import production_media
     production_media.prune_stale(db.settings().temporary_retention_days)
     from backend.uploads import prune_sessions

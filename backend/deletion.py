@@ -61,8 +61,16 @@ def _remove(path,allowed_root):
         if p.is_file():return p.stat().st_size
         return sum(f.stat().st_size for f in p.rglob('*') if f.is_file() and not f.is_symlink())
     size=size_of(target)
-    if target.is_dir():shutil.rmtree(target)
-    else:target.unlink()
+    for attempt in range(3):
+        try:
+            if target.is_dir():shutil.rmtree(target)
+            else:target.unlink()
+            break
+        except FileNotFoundError:
+            break
+        except OSError:
+            if attempt==2:raise
+            time.sleep((0.25,0.75)[attempt])
     return size
 
 

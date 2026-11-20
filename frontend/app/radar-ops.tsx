@@ -101,7 +101,7 @@ export default function RadarOps({token,mode}:Props){
     {mode==='radar'?<>
       <section className="panel">
         <div className="section-title"><h2>Top criadores do YouTube</h2><button disabled={busy} onClick={()=>act('viral-radar/top-creators/refresh',undefined,'POST','Atualização do ranking enviada ao worker.')}><RefreshCw size={14}/> Atualizar top 20</button></div>
-        <p className="muted">Ranking público consultado sem credenciais do YouTube. IDs e inscritos só aparecem quando disponíveis publicamente. A lista pode ser parcial. Última atualização: {creators.updated_at||'pendente'}. Identificados pelo ranking: {creators.verified_count||0}.</p>
+        <p className="muted">Ranking baseado em fontes públicas; quando configuradas, as integrações do YouTube fornecem metadados oficiais. IDs e inscritos dependem da disponibilidade real. A lista pode ser parcial. Última atualização: {creators.updated_at||'pendente'}. Identificados pelo ranking: {creators.verified_count||0}.</p>
         {(!creators.channels||!creators.channels.length)&&<p>Nenhum canal disponível. Adicione um canal UC manualmente ou atualize o ranking público.</p>}
         <div className="radar-creator-grid">{(creators.channels||[]).map((c:Row)=><article key={c.channel_id}>
           <strong>{c.rank?c.rank+'º · ':''}{c.name}</strong><small>{c.country||'País não disponível'} · {c.language||'Idioma não disponível'}</small>
@@ -114,7 +114,7 @@ export default function RadarOps({token,mode}:Props){
       </section>
       <section className="panel">
         <div className="section-title"><h2>Radar viral · últimos 30 dias</h2><button disabled={busy} onClick={()=>act('viral-radar/scan',undefined,'POST','Nova consulta pública agendada.')}><RefreshCw size={14}/> Pesquisar vídeos e lives</button></div>
-        <p className="muted">O score considera métricas públicas quando disponíveis, sem API key. Métricas não acessíveis aparecem como indisponíveis; acessibilidade não concede licença.</p>
+        <p className="muted">O score usa métricas verificáveis; a chave de API e o login Google são opcionais e podem ampliar os dados disponíveis. Consulta pública não concede licença.</p>
         {(radar.radar?.top||[]).slice(0,25).map((item:Row)=><div className="radar-result" key={item.id}>
           <strong>{item.title}</strong>
           <small>{item.creator} · {item.score??'indisponível'}/100 · publicado {item.published_at?.slice(0,10)}</small>
@@ -126,7 +126,7 @@ export default function RadarOps({token,mode}:Props){
     </>:<>
       <section className="panel">
         <h2>Enviar link de live · gerar três cortes distintos</h2>
-        <p className="muted">Cole o link de um VOD público já encerrado (últimos 30 dias). O sistema verifica o link sem YouTube Data API e produz três cortes distintos, acompanhados no Video Studio; nenhuma postagem é automática. A reutilização exige autorização do titular.</p>
+        <p className="muted">Cole o link de um VOD público já encerrado (últimos 30 dias). O sistema consulta a API quando configurada (ou tenta a consulta pública), e produz três cortes distintos acompanhados no Video Studio; nenhuma postagem é automática. A reutilização exige autorização do titular.</p>
         <form className="radar-allowlist" onSubmit={submitManualLive}>
           <label>URL da live encerrada
             <input type="url" required placeholder="https://www.youtube.com/live/..."

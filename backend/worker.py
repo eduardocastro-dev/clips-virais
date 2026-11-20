@@ -135,7 +135,7 @@ def scheduler():
         if now - db.get_setting('last_auto_queue', 0) >= 60:
             db.put_setting('last_auto_queue', now)
             queue_opportunities()
-        # Public-only metadata discovery; no YouTube Data API key or OAuth.
+        # Public discovery; YouTube metadata resolver uses configured API/OAuth when available.
         if now-db.get_setting('top20_last_attempt',0)>=24*3600:
             db.enqueue('top20_refresh',unique_key='top20:'+db.today())
             db.put_setting('top20_last_attempt',now)

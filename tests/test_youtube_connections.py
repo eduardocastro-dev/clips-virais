@@ -119,3 +119,25 @@ def test_no_login_no_key_allows_anonymous_fallback(monkeypatch):
     from backend import public_youtube as adapter
     monkeypatch.setattr(adapter,'_extract',lambda url:{'id':VID,'title':'Anônimo'})
     assert public_video_info('https://www.youtube.com/watch?v='+VID)['title']=='Anônimo'
+
+
+def test_oauth_callback_requires_valid_one_use_state(client,monkeypatch):
+    bad=client.get('/api/youtube/oauth/callback',
+                   params={'state':'unknown','code':'do-not-store'})
+    assert bad.status_code==400
+    assert 'do-not-store' not in bad.text
+    db.set_secret('youtube_client_id','test-client-id.apps.googleusercontent.com')
+    db.set_secret('youtube_client_secret','oauth-secret-never-public')
+    from urllib.parse import urlsplit,parse_qs
+    url=yt.oauth_state('http://127.0.0.1:3000/api/youtube/oauth/callback')
+    state=parse_qs(urlsplit(url).query)['state'][0]
+    monkeypatch.setattr(yt,'_request_tokens',lambda form:{
+        'access_token':'ephemeral_access_test','refresh_token':'refresh_test',
+        'scope':yt.SCOPE,'expires_in':3600})
+    monkeypatch.setattr(yt,'_get_api',lambda *args,**kwargs:{
+        'items':[{'snippet':{'title':'Meu canal privado'}}]})
+    ok=client.get('/api/youtube/oauth/callback',params={'state':state,'code':'single-use'})
+    assert ok.status_code==200
+    replay=client.get('/api/youtube/oauth/callback',params={'state':state,'code':'single-use'})
+    assert replay.status_code==400
+    assert 'ephemeral_access_test' not in ok.text

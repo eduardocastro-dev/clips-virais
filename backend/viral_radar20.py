@@ -421,7 +421,7 @@ def scan_recent(limit=30):
     _write('viral_radar_'+db.today()+'.json',radar)
     _write('recent_lives.json',{'scanned_at':now.isoformat(),
                                 'window_days':RADAR_WINDOW_DAYS,'items':lives})
-    md=['# Viral Radar — '+db.today(),'','Fonte: metadados públicos sem YouTube Data API. '
+    md=['# Viral Radar — '+db.today(),'','Fonte: metadados públicos e YouTube Data API quando configurada. '
         'Acessibilidade pública não concede licença de reutilização.','']
     md.extend(f"- **{x['creator']}** — {x['title']} — score "
               f"{x['score'] if x['score'] is not None else 'indisponível'}"

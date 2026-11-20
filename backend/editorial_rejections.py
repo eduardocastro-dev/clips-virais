@@ -17,7 +17,7 @@ COOLDOWN_DAYS = 30
 COOLDOWN_SECONDS = COOLDOWN_DAYS * 86400
 # Generic GTA VI vocabulary does not identify an editorial subject.
 _NOISE = set("""
-gta 6 vi v grand theft auto rockstar videogame game video videos gaming
+gta gta6 6 vi v grand theft auto rockstar videogame game video videos gaming
 short shorts youtube youtuber official oficial novo nova novos novas new
 hoje agora today ontem yesterday atualizado update atualizacao novidades
 sobre falando veja vejaa vejao tudo todos todas muito mais para pelo pela

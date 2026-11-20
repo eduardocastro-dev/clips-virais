@@ -70,8 +70,9 @@ def test_unauthorized_video_is_not_downloaded():
     assert not list((db.ROOT/'temp'/id).glob('source.*')) if (db.ROOT/'temp'/id).exists() else True
 
 
-def test_retention_keeps_pending_manual_and_expires_finished():
-    pending=make_video(status='AWAITING_MANUAL_DECISION')
+@pytest.mark.parametrize('manual_status', ['AWAITING_MANUAL_DECISION', 'PENDING_RIGHTS_REVIEW'])
+def test_retention_keeps_pending_manual_and_expires_finished(manual_status):
+    pending=make_video(status=manual_status)
     old=make_video(status='DISCARDED')
     for id in (pending,old):
         folder=production_media.workspace(id)

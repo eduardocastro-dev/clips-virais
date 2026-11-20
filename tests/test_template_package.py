@@ -89,3 +89,20 @@ def test_render_uses_package_tv_hole_and_has_no_default_credit(monkeypatch,tmp_p
     assert 'FONTE:' not in command
     assert result['onscreen_credit_drawn'] is False
     assert result['foreground_path'].endswith('01_gta_news_fg.png')
+
+
+
+def test_missing_operator_zip_pauses_before_tts_and_render(monkeypatch,tmp_path):
+    from types import SimpleNamespace
+    from backend import media,assets
+    from backend import template_pack as pack
+    monkeypatch.setattr(pack,'selected',lambda name:None)
+    monkeypatch.setattr(assets,'sync_library',lambda:None)
+    monkeypatch.setattr(assets,'mandatory_assets',lambda **kwargs:[])
+    invoked=[]
+    monkeypatch.setattr(media,'narration',lambda *args,**kwargs:invoked.append('tts'))
+    video={'id':'d'*32,'template':'gta-news','test':False}
+    script=SimpleNamespace(template='gta-news')
+    with pytest.raises(assets.MissingAssetsError,match='gta_studio_templates.zip'):
+        media.render(video,script)
+    assert invoked==[]

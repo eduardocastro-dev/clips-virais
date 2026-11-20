@@ -252,7 +252,7 @@ def prune_stale(days: int):
         if not folder.is_dir() or folder.is_symlink() or not re.fullmatch('[0-9a-f]{32}',folder.name):
             continue
         found=db.rows('SELECT status,manual_decision FROM videos WHERE id=:id',{'id':folder.name})
-        if found and (found[0]['status'] in ('PROCESSING','QUEUED','RETRY','AWAITING_MANUAL_DECISION') or
+        if found and (found[0]['status'] in ('PROCESSING','QUEUED','RETRY','AWAITING_MANUAL_DECISION','PENDING_RIGHTS_REVIEW') or
                       found[0]['manual_decision']=='approve_pending'):
             continue
         if folder.stat().st_mtime<cutoff:

@@ -165,7 +165,7 @@ def scheduler():
                        unique_key=f'source:{source["id"]}:{int(now // (source["interval_minutes"]*60))}')
 
 
-def prioritized_opportunities(limit=150):
+def prioritized_opportunities(limit=1000):
     # Strong preference for Shorts; never hide longer YouTube videos or RSS.
     return db.rows("""SELECT * FROM opportunities
         ORDER BY CASE
@@ -182,7 +182,12 @@ def queue_opportunities():
         return
     if not config.automatic:
         return
-    for opportunity in prioritized_opportunities(limit=30):
+    from backend.editorial_rejections import active,blocked
+    vetoes=active()  # load once per scheduler cycle, even after old MP4 purges
+    vetoed=0
+    available=0
+    errors=0
+    for opportunity in prioritized_opportunities(limit=1000):
         try:
             if db.production_usage() >= config.daily_limit:
                 break
@@ -200,19 +205,42 @@ def queue_opportunities():
             if db.rows('SELECT id FROM videos WHERE url=:canonical OR url=:original',
                        {'canonical':canonical_url,'original':opportunity['url']}):
                 continue
+            available+=1
+            title=(reference.get('title') if opportunity['platform']=='news' else
+                   opportunity.get('title'))
+            rejection=blocked(canonical_url,title,vetoes)
+            if rejection:
+                vetoed+=1
+                continue
             if opportunity['platform']=='news':
                 created_id=create_video(reference=reference)
             else:
                 created_id=create_video(import_request)
             # Only automatically queued Shorts participate in quota's 3-attempt policy.
             db.put_setting('quota_auto_shorts:'+created_id, True)
-            db.log_event(None, 'worker', 'AUTO_QUEUE', f'Oportunidade enfileirada automaticamente: {opportunity["url"]}')
-            break
+            db.log_event(None, 'worker', 'AUTO_QUEUE',
+                         f'Oportunidade enfileirada automaticamente: {opportunity["url"]}')
+            db.put_setting('scheduler_status',
+                           'Modo automático ativo; nova oportunidade original enfileirada.')
+            return {'queued':True,'video_id':created_id,'avoided':vetoed}
         except Exception as exc:
+            errors+=1
             message = str(exc)[:350]
             db.put_setting('scheduler_status', 'Falha ao enfileirar oportunidade: ' + message)
-            logging.error(json.dumps({'error': 'auto_queue_failed', 'message': message}, ensure_ascii=False))
+            logging.error(json.dumps({'error': 'auto_queue_failed', 'message': message},
+                                     ensure_ascii=False))
             continue
+    if vetoed:
+        db.put_setting('editorial_rejections_last_avoided',
+                       {'count':vetoed,'at':time.time()})
+    if available and vetoed==available:
+        db.put_setting('scheduler_status',
+                       f'Sem tema novo: {vetoed} oportunidades descartadas pelo operador '
+                       'foram ignoradas. Aguardando novas fontes.')
+    elif not available and not errors:
+        db.put_setting('scheduler_status',
+                       'Nenhuma oportunidade inédita disponível; aguardando nova pesquisa.')
+    return {'queued':False,'avoided':vetoed,'available':available,'errors':errors}
 
 
 def perform(job):

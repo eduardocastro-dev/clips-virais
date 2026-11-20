@@ -52,7 +52,8 @@ def source_url(video:dict) -> str | None:
 
 
 def record_rights(video_id:str, source_url:str, asset_id:str|None,
-                  rights_status:str, detail:str):
+                  rights_status:str, detail:str, *, source_start=None,
+                  source_end=None, credit=None, requires_onscreen_credit=False):
     file=db.DATA/'rights_log.json'
     try:
         data=json.loads(file.read_text('utf-8')) if file.is_file() else {'entries':[]}
@@ -63,10 +64,13 @@ def record_rights(video_id:str, source_url:str, asset_id:str|None,
     entry={'at':datetime.now(timezone.utc).isoformat(),
            'video_id':video_id,'source_url':source_url,'asset_id':asset_id,
            'status':rights_status,'detail':detail[:400],
+           'source_start_seconds':source_start,'source_end_seconds':source_end,
+           'credit':credit,'requires_onscreen_credit':requires_onscreen_credit,
            'scope':'gta_studio_tv_slot'}
     # Suppress identical repeat logs when re-rendering the same file.
     if not entries or any(entries[-1].get(key)!=entry[key] for key in
-                          ('video_id','asset_id','status','detail')):
+                          ('video_id','asset_id','status','detail','source_start_seconds',
+                           'source_end_seconds','requires_onscreen_credit')):
         entries.append(entry)
         data['entries']=entries[-5000:]
         db.atomic(file,json.dumps(data,ensure_ascii=False,indent=2)+'\n')

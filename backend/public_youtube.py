@@ -49,13 +49,16 @@ def _extract(url: str, *, flat=False, limit=1):
         with YoutubeDL(opts) as ydl:
             return ydl.extract_info(url, download=False)
     except Exception:
-        raise IntegrationError("Não foi possível consultar metadados públicos do YouTube "
-                               "sem login. Tente novamente mais tarde; nenhuma API key é necessária.") from None
+        raise IntegrationError("Não foi possível consultar metadados públicos do YouTube. "
+                               "Configure chave ou login em Configurações > Integrações, "
+                               "ou tente novamente.") from None
 
 
 def public_video_info(video_url: str) -> dict:
     vid=video_id_from_url(video_url)
-    data=_extract("https://www.youtube.com/watch?v="+vid)
+    from backend.youtube_data import configured,video_info
+    data=(video_info(video_url) if configured() else
+          _extract("https://www.youtube.com/watch?v="+vid))
     if not isinstance(data,dict) or data.get("id")!=vid:
         raise IntegrationError("Vídeo público não encontrado ou ID divergente.")
     return data
@@ -66,6 +69,18 @@ def public_channel_entries(channel_id: str, tab: str="videos", limit: int=12) ->
         raise ValueError("ID UC inválido.")
     if tab not in ("videos","shorts","streams"):
         raise ValueError("Aba do canal inválida.")
+    from backend.youtube_data import configured,channel_uploads
+    if configured():
+        uploads=channel_uploads(channel_id,limit=max(limit,40))
+        if tab=='videos':return uploads[:limit]
+        if tab=='streams':
+            return [x for x in uploads if x.get('live_status')=='was_live'][:limit]
+        # API does not expose an explicit isShort flag; avoid falsely
+        # labelling normal videos of 180s or less as Shorts.
+        return [x for x in uploads if x.get('duration') is not None and
+                x['duration']<=180 and
+                ('#shorts' in (str(x.get('title') or '')+' '+str(x.get('description') or '')).lower())
+               ][:limit]
     page=_extract(f"https://www.youtube.com/channel/{channel_id}/{tab}",
                   flat=True,limit=max(1,min(30,limit)))
     if not isinstance(page,dict):
@@ -85,6 +100,22 @@ def public_channel_info(channel_id: str) -> dict:
         raise ValueError("ID UC inválido.")
     # A flat, single-entry listing is enough to identify a channel by name,
     # but never invent subscriber counts or country if the page omits them.
+    from backend.youtube_data import configured,_get_api
+    if configured():
+        from backend import core as db
+        key=db.secret('youtube_api_key')
+        from backend.youtube_data import access_token
+        raw=_get_api('channels',{'part':'snippet,statistics','id':channel_id},
+                     key=key,token=access_token() if not key else None)
+        candidates=raw.get('items') or []
+        if not candidates:raise IntegrationError('Canal não encontrado.')
+        channel=candidates[0]
+        fields=channel.get('snippet') or {}
+        stats=channel.get('statistics') or {}
+        return {'channel_id':channel_id,'name':fields.get('title') or channel_id,
+                'subscribers':int(stats['subscriberCount']) if 'subscriberCount' in stats else None,
+                'country':fields.get('country'),'language':fields.get('defaultLanguage'),
+                'verified_publicly':True}
     data=_extract(f"https://www.youtube.com/channel/{channel_id}/videos",flat=True,limit=1)
     if not isinstance(data,dict):
         raise IntegrationError("Não foi possível verificar o canal público.")

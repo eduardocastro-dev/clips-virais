@@ -276,9 +276,12 @@ def select_visuals(video,script):
                 seg['tv_source_asset_id']=tv_source['id']
                 seg['tv_source_channel']=tv_source.get('channel','')
                 try:
-                    seg['tv_source_date']=json.loads(tv_source.get('metadata') or '{}').get('source_date','')
+                    tv_meta=json.loads(tv_source.get('metadata') or '{}')
+                    seg['tv_source_date']=tv_meta.get('source_date','')
+                    seg['requires_onscreen_credit']=bool(tv_meta.get('requires_onscreen_credit',False))
                 except (TypeError,ValueError):
                     seg['tv_source_date']=''
+                    seg['requires_onscreen_credit']=False
             segments.append(seg)
         # Stagger article screenshot/card over some scene segments, never full article mirrors.
         if segments:

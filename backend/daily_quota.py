@@ -148,7 +148,12 @@ def state() -> dict:
         'deadline_reached':not remaining_time,
         'status':'COMPLETA' if complete else 'EM_ANDAMENTO' if remaining_time else 'PARCIAL',
         'live_clip_scheduler_status':db.get_setting('live_clip_scheduler_status','Aguardando busca de VODs elegíveis.'),
-        'manual_review_only':True
+        'manual_review_only':True,
+        'excluido_pelo_operador': (
+            int(db.get_setting('operator_cleanup_deleted_count',0) or 0)
+            if db.get_setting('operator_cleanup_hold_day')==db.today() else 0),
+        'automatic_replacement_paused_by_operator':(
+            db.get_setting('operator_cleanup_hold_day')==db.today())
     }
     _write(db.DATA / 'quota_state.json', result)
     if result['status'] in ('PARCIAL','COMPLETA'):

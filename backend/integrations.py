@@ -32,13 +32,13 @@ def request(method, url, **kwargs):
 
 
 def youtube_get(resource, params):
-    """Legacy adapter intentionally disabled; public discovery uses yt-dlp."""
-    raise IntegrationError('YouTube Data API não é utilizada pelo GTA Studio. '
-                           'Consulte os metadados públicos disponíveis, sem chave.')
+    from backend.youtube_data import _get_api,access_token
+    key=db.secret('youtube_api_key')
+    return _get_api(resource,params,key=key,
+                    token=access_token() if not key else None)
 
 
 def youtube_metadata(url):
-    """Single anonymous metadata path regardless of any previously saved key."""
     return public_youtube_metadata(url)
 
 
@@ -85,7 +85,30 @@ def public_social_metadata(url, platform):
 
 
 def public_youtube_metadata(url):
-    """Reference-only extraction. Public access may be throttled by YouTube."""
+    """Reference metadata; cache, Data API first, OAuth second, anonymous only if unconfigured."""
+    from backend.youtube_data import configured,video_info
+    from backend.public_youtube import video_id_from_url
+    video_id_from_url(url)
+    cached=db.cache_get('metadata:'+url)
+    if cached:return cached
+    if configured():
+        data=video_info(url)
+        date=str(data.get('upload_date') or '')
+        published=(date[:4]+'-'+date[4:6]+'-'+date[6:8]+'T00:00:00Z'
+                   if len(date)==8 else None)
+        result={
+            'title':data['title'][:300],
+            'description':(data.get('description') or '')[:4000],
+            'source_profile':data.get('uploader'),
+            'published':published,
+            'metrics':{'viewCount':data['view_count']} if data.get('view_count') is not None else {},
+            'url':url,'platform':'youtube','collected_at':time.time(),
+            'rights':'REFERENCE_ONLY','metadata_source':'youtube_data_api_v3'
+        }
+        for a,b in (('likeCount','like_count'),('commentCount','comment_count')):
+            if data.get(b) is not None:result['metrics'][a]=data[b]
+        db.cache_set('metadata:'+url,result,600 if data.get('is_live') else 21600)
+        return result
     try:
         from yt_dlp import YoutubeDL
         with YoutubeDL({'quiet': True, 'no_warnings': True, 'skip_download': True,
@@ -412,7 +435,7 @@ def youtube_upload(path, script):
 
 
 def collect_metrics():
-    """Best-effort public stats; never request a YouTube API key."""
+    """Best-effort video statistics via configured API or anonymous fallback."""
     for pub in db.rows("SELECT * FROM publications WHERE status='PUBLICADO' AND platform='youtube'"):
         if db.cache_get('metrics:' + pub['id']):
             continue

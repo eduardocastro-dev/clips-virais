@@ -161,7 +161,14 @@ def subtitles(script, style, target, transcript=None, styled_hook=False):
                              'Default,,0,0,0,,{\\an2\\pos(540,1000)\\fad(60,70)}'+chunk)
     content='\n'.join(lines)
     if scenario:
-        content=content.replace(r'\pos(540,1000)',r'\pos(540,1530)')
+        from backend.template_pack import selected
+        package=selected(script.template)
+        if package:
+            band=package['layout']['subtitle_band']
+            y=band['y']+band['h']//2
+            content=content.replace(r'\pos(540,1000)',r'\pos(540,'+str(y)+')')
+        else:
+            content=content.replace(r'\pos(540,1000)',r'\pos(540,1530)')
     target.write_text(content, encoding='utf-8')
 
 
@@ -278,22 +285,37 @@ def render(video, script: Script, attempt=1):
         args+=['-loop','1','-framerate','1','-i',str(avatar)]
         input_index=idx+(3 if hook_overlay else 2)
         if scenario:
-            graph.append(f'[{input_index}:v]scale=610:580:force_original_aspect_ratio=decrease,'
+            from backend.template_pack import selected
+            packed=selected(video['template'])
+            if not packed:
+                raise PreflightError('Pacote de templates não instalado.')
+            z=packed['layout']['presenter_zone']
+            graph.append(f'[{input_index}:v]scale={z["w"]}:{z["h"]}:'
+                         f'force_original_aspect_ratio=decrease,'
                          f'format=rgba{rim_filter}[avatar{idx}]')
         else:
             graph.append(f'[{input_index}:v]scale=880:1010:force_original_aspect_ratio=decrease,format=rgba[avatar{idx}]')
         label=f'overlay{idx}'
         start,end=section['start'],section['end']
-        side_x='(W-w)/2' if scenario else ('38' if idx%2==0 else 'W-w-155')
-        pose_y='800' if scenario else '1110+9*sin(2*PI*t/2.7)'
+        side_x=(str(z['x'])+'+('+str(z['w'])+'-w)/2') if scenario else ('38' if idx%2==0 else 'W-w-155')
+        pose_y=str(z['y']) if scenario else '1110+9*sin(2*PI*t/2.7)'
         graph.append(f"[{current}][avatar{idx}]overlay=x={side_x}:y={pose_y}:enable='between(t,{start:.3f},{end:.3f})'[{label}]")
         current=label
         pose_report.append({'speaker':who,'requested_emotion':section['emotion'],'emotion':actual,
                             'file':str(avatar.relative_to(db.ROOT)),'start':start,'end':end,'layout':'bust','side':'left' if idx%2==0 else 'right',
-                            'scale_px':[610,580] if scenario else [880,1010],
-                             'safe_zone':'presenter_800_1388' if scenario else 'face_above_bottom_18_percent'})
+                            'scale_px':[z['w'],z['h']] if scenario else [880,1010],
+                             'safe_zone':'presenter_zone_from_templates_json' if scenario else 'face_above_bottom_18_percent'})
     db.atomic(work/'pose-timeline.json',json.dumps(pose_report,ensure_ascii=False,indent=2))
     if scenario:
+        # Full foreground remains over alpha presenter, below subtitles.
+        from backend.template_pack import selected
+        pack=selected(video['template'])
+        if not pack:raise PreflightError('Pacote de templates não instalado.')
+        args+=['-loop','1','-framerate','30','-i',str(pack['foreground'])]
+        fg_index=len(sections)+(3 if hook_overlay else 2)
+        graph.append(f'[{fg_index}:v]format=rgba[foreground]')
+        graph.append(f'[{current}][foreground]overlay=x=0:y={pack["layout"]["plate_offset_y"]}:shortest=1[fgcombined]')
+        current='fgcombined'
         graph.append(f'[{current}]ass=subtitles.ass[captioned]')
         current='captioned'
     args+=['-filter_complex',';'.join(graph),'-map',f'[{current}]']

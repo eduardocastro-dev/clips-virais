@@ -109,9 +109,12 @@ def init_db():
                 c.exec_driver_sql(f'ALTER TABLE publications ADD COLUMN {name} {typ}')
         video_cols={r[1] for r in c.exec_driver_sql('PRAGMA table_info(videos)')}
         for name, typ in [('approved_at','REAL'),('manual_decision','TEXT'),('manual_by','TEXT'),
-                          ('manual_at','REAL'),('render_error','TEXT')]:
+                          ('manual_at','REAL'),('render_error','TEXT'),
+                          ('discarded_at','REAL'),('pre_discard_status','TEXT'),
+                          ('delete_reason','TEXT')]:
             if name not in video_cols:
                 c.exec_driver_sql(f'ALTER TABLE videos ADD COLUMN {name} {typ}')
+        c.exec_driver_sql('CREATE INDEX IF NOT EXISTS idx_videos_discarded ON videos(discarded_at)')
         clip_cols={r[1] for r in c.exec_driver_sql('PRAGMA table_info(live_clips)')}
         if 'stage' not in clip_cols:
             c.exec_driver_sql('ALTER TABLE live_clips ADD COLUMN stage TEXT')

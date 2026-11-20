@@ -111,6 +111,27 @@ def _join_limited(parts, limit, hashtags):
     return (body + "\n\n" + hashtag_line).strip()[:limit]
 
 
+def _tv_source_credits(video):
+    """Add credited source URLs used in TV, without inventing an owner or license."""
+    import json
+    import re
+    from backend import core as db
+    ident=str(video.get('id') or '')
+    if not re.fullmatch(r'[a-f0-9]{32}',ident):return []
+    file=db.ROOT/'handoff'/ident/'visual-assets.json'
+    try:scenes=json.loads(file.read_text('utf-8'))
+    except (OSError,ValueError):return []
+    sources=[]
+    for scene in scenes:
+        for seg in scene.get('segments',[]):
+            slot=seg.get('tv_slot') or {}
+            url=str(slot.get('tv_source_url') or '')
+            name=_line(slot.get('source_label'),80)
+            if url.startswith('https://') and url not in [x[1] for x in sources]:
+                sources.append((name,url))
+    return sources[:8]
+
+
 def build_seo_package(script: dict, video: dict, platform: str) -> dict:
     """Generate copy ready to paste, using only the already approved script."""
     if platform not in PLATFORMS:
@@ -124,7 +145,12 @@ def build_seo_package(script: dict, video: dict, platform: str) -> dict:
     cta = _line(script.get("cta"), 160) or "Qual detalhe chamou mais sua atenção? Comente!"
     source = _source_url(video)
     source_line = "Referência: " + source if source else ""
-    credits_line = "Créditos: " + credits if credits else ""
+    media_credits = _tv_source_credits(video)
+    supplemental = "\n".join(
+        ("Fonte adicional: "+name+" · "+url if name else "Fonte adicional: "+url)
+        for name,url in media_credits)
+    credits_line = "\n".join(x for x in (
+        "Créditos: " + credits if credits else "",supplemental) if x)
     hashtags = _unique([*script.get("hashtags", []), *DEFAULT_HASHTAGS[platform]],
                        5 if platform == "youtube" else 6)
     tags = _tags(script)

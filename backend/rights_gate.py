@@ -55,6 +55,15 @@ def requires_review(video:dict) -> bool:
 def require_clearance(video:dict):
     if video.get('rights') in ('BLOCKED','REVIEW_REQUIRED'):
         raise IntegrationError('Direitos da produção bloqueados ou pendentes.')
+    # An on-screen credit explicitly required by a source license cannot
+    # be replaced with description-only attribution.
+    for scene in _manifest(video['id']):
+        for segment in scene.get('segments',[]):
+            slot=segment.get('tv_slot') or {}
+            if slot.get('requires_onscreen_credit') and not slot.get('onscreen_credit_drawn'):
+                raise IntegrationError(
+                    'A licença desta fonte exige crédito na tela. '
+                    'Revise e re-renderize com a indicação visível.')
     pending=pending_sources(video['id'])
     if pending:
         raise IntegrationError('A TV contém material aguardando licença; confirme os direitos em Video Studio antes da publicação.')

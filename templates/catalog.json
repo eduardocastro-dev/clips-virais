@@ -14,47 +14,9 @@
     "animation_style": "slide_in",
     "highlight_color": "&H00F4FF&",
     "editorial_guideline": "Tom jornalístico dinâmico, foco em anúncios confirmados da Rockstar, datas e impactos na comunidade com ritmo ágil.",
-    "scene_engine": "tv_slots_v1",
-    "screen": {
-      "outer_px": [
-        92,
-        225,
-        988,
-        788
-      ],
-      "content_px": [
-        143,
-        291,
-        937,
-        733
-      ],
-      "count": 1,
-      "perspective": "corner_pin",
-      "max_push_in": 0.03,
-      "channel_glitch_frames": 7
-    },
-    "presenter_zone_px": [
-      160,
-      800,
-      920,
-      1388
-    ],
-    "captions_zone_px": [
-      65,
-      1400,
-      1015,
-      1580
-    ],
-    "layers": [
-      "background_plate",
-      "tv_content",
-      "presenter_alpha",
-      "foreground_props",
-      "atmosphere",
-      "kinetic_subtitles"
-    ],
+    "scene_engine": "operator_pack_templates_json",
     "scenario_sfx": "news_stinger",
-    "source_video_review": "PRIVATE_PREVIEW_UNTIL_RIGHTS_CONFIRMED"
+    "package_id": "01_gta_news"
   },
   "gta-theory": {
     "name": "GTA Theory",
@@ -71,47 +33,9 @@
     "animation_style": "zoom_pulse",
     "highlight_color": "&H00FDBA&",
     "editorial_guideline": "Tom investigativo e misterioso, explorando vazamentos de código, mapas, patentes e rumores com análise crítica sem afirmar como fato absoluto.",
-    "scene_engine": "tv_slots_v1",
-    "screen": {
-      "outer_px": [
-        92,
-        225,
-        988,
-        788
-      ],
-      "content_px": [
-        143,
-        291,
-        937,
-        733
-      ],
-      "count": 1,
-      "perspective": "corner_pin",
-      "max_push_in": 0.03,
-      "channel_glitch_frames": 7
-    },
-    "presenter_zone_px": [
-      160,
-      800,
-      920,
-      1388
-    ],
-    "captions_zone_px": [
-      65,
-      1400,
-      1015,
-      1580
-    ],
-    "layers": [
-      "background_plate",
-      "tv_content",
-      "presenter_alpha",
-      "foreground_props",
-      "atmosphere",
-      "kinetic_subtitles"
-    ],
+    "scene_engine": "operator_pack_templates_json",
     "scenario_sfx": "riser",
-    "source_video_review": "PRIVATE_PREVIEW_UNTIL_RIGHTS_CONFIRMED"
+    "package_id": "02_gta_theory"
   },
   "gta-comparison": {
     "name": "GTA Comparison",
@@ -128,47 +52,9 @@
     "animation_style": "split_reveal",
     "highlight_color": "&H00FFFF&",
     "editorial_guideline": "Tom analítico e detalhista, comparando a evolução gráfica, física e mecânicas de GTA 6 em relação a GTA 5, RDR 2 ou locais reais de Miami.",
-    "scene_engine": "tv_slots_v1",
-    "screen": {
-      "outer_px": [
-        92,
-        225,
-        988,
-        788
-      ],
-      "content_px": [
-        143,
-        291,
-        937,
-        733
-      ],
-      "count": 1,
-      "perspective": "corner_pin",
-      "max_push_in": 0.03,
-      "channel_glitch_frames": 7
-    },
-    "presenter_zone_px": [
-      160,
-      800,
-      920,
-      1388
-    ],
-    "captions_zone_px": [
-      65,
-      1400,
-      1015,
-      1580
-    ],
-    "layers": [
-      "background_plate",
-      "tv_content",
-      "presenter_alpha",
-      "foreground_props",
-      "atmosphere",
-      "kinetic_subtitles"
-    ],
+    "scene_engine": "operator_pack_templates_json",
     "scenario_sfx": "whoosh",
-    "source_video_review": "PRIVATE_PREVIEW_UNTIL_RIGHTS_CONFIRMED"
+    "package_id": "03_gta_comparison"
   },
   "gta-cinematic": {
     "name": "GTA Cinematic",
@@ -185,47 +71,9 @@
     "animation_style": "ken_burns",
     "highlight_color": "&H00D4FF&",
     "editorial_guideline": "Tom imersivo com cortes contemplativos, destacando a atmosfera de Vice City, iluminação global, densidade da água e tecnologia de ponta.",
-    "scene_engine": "tv_slots_v1",
-    "screen": {
-      "outer_px": [
-        92,
-        225,
-        988,
-        788
-      ],
-      "content_px": [
-        143,
-        291,
-        937,
-        733
-      ],
-      "count": 1,
-      "perspective": "corner_pin",
-      "max_push_in": 0.03,
-      "channel_glitch_frames": 7
-    },
-    "presenter_zone_px": [
-      160,
-      800,
-      920,
-      1388
-    ],
-    "captions_zone_px": [
-      65,
-      1400,
-      1015,
-      1580
-    ],
-    "layers": [
-      "background_plate",
-      "tv_content",
-      "presenter_alpha",
-      "foreground_props",
-      "atmosphere",
-      "kinetic_subtitles"
-    ],
+    "scene_engine": "operator_pack_templates_json",
     "scenario_sfx": "cinematic",
-    "source_video_review": "PRIVATE_PREVIEW_UNTIL_RIGHTS_CONFIRMED"
+    "package_id": "04_gta_cinematic"
   },
   "gta-facts": {
     "name": "GTA Facts",
@@ -242,47 +90,9 @@
     "animation_style": "pop_card",
     "highlight_color": "&H00FFB0&",
     "editorial_guideline": "Estrutura rápida no formato 'Top Detalhes / Fatos que você não percebeu', mantendo o espectador ligado em cada curiosidade confirmada.",
-    "scene_engine": "tv_slots_v1",
-    "screen": {
-      "outer_px": [
-        92,
-        225,
-        988,
-        788
-      ],
-      "content_px": [
-        143,
-        291,
-        937,
-        733
-      ],
-      "count": 1,
-      "perspective": "corner_pin",
-      "max_push_in": 0.03,
-      "channel_glitch_frames": 7
-    },
-    "presenter_zone_px": [
-      160,
-      800,
-      920,
-      1388
-    ],
-    "captions_zone_px": [
-      65,
-      1400,
-      1015,
-      1580
-    ],
-    "layers": [
-      "background_plate",
-      "tv_content",
-      "presenter_alpha",
-      "foreground_props",
-      "atmosphere",
-      "kinetic_subtitles"
-    ],
+    "scene_engine": "operator_pack_templates_json",
     "scenario_sfx": "arcade_pop",
-    "source_video_review": "PRIVATE_PREVIEW_UNTIL_RIGHTS_CONFIRMED"
+    "package_id": "05_gta_facts"
   },
   "gta-reaction": {
     "name": "GTA Reaction",
@@ -299,47 +109,9 @@
     "animation_style": "pop_card",
     "highlight_color": "&H0080FF&",
     "editorial_guideline": "Tom participativo e entusiasmado com a persona em destaque, reagindo às especulações e debatendo o impacto no mundo dos games.",
-    "scene_engine": "tv_slots_v1",
-    "screen": {
-      "outer_px": [
-        92,
-        225,
-        988,
-        788
-      ],
-      "content_px": [
-        143,
-        291,
-        937,
-        733
-      ],
-      "count": 1,
-      "perspective": "corner_pin",
-      "max_push_in": 0.03,
-      "channel_glitch_frames": 7
-    },
-    "presenter_zone_px": [
-      160,
-      800,
-      920,
-      1388
-    ],
-    "captions_zone_px": [
-      65,
-      1400,
-      1015,
-      1580
-    ],
-    "layers": [
-      "background_plate",
-      "tv_content",
-      "presenter_alpha",
-      "foreground_props",
-      "atmosphere",
-      "kinetic_subtitles"
-    ],
+    "scene_engine": "operator_pack_templates_json",
     "scenario_sfx": "hit",
-    "source_video_review": "PRIVATE_PREVIEW_UNTIL_RIGHTS_CONFIRMED"
+    "package_id": "06_gta_reaction"
   },
   "gta-radar-viral": {
     "name": "Radar GTA 6 · Viral",
@@ -356,47 +128,9 @@
     "animation_style": "slide_in",
     "highlight_color": "&H00F4FF&",
     "editorial_guideline": "Gancho factual em até 2 segundos; cortes entre detalhes visuais reais, palavras-chave e contexto; apresentador expressivo mas claro. Sem copiar criadores nem transformar rumores em fatos. CTA curto.",
-    "scene_engine": "tv_slots_v1",
-    "screen": {
-      "outer_px": [
-        92,
-        225,
-        988,
-        788
-      ],
-      "content_px": [
-        143,
-        291,
-        937,
-        733
-      ],
-      "count": 1,
-      "perspective": "corner_pin",
-      "max_push_in": 0.03,
-      "channel_glitch_frames": 7
-    },
-    "presenter_zone_px": [
-      160,
-      800,
-      920,
-      1388
-    ],
-    "captions_zone_px": [
-      65,
-      1400,
-      1015,
-      1580
-    ],
-    "layers": [
-      "background_plate",
-      "tv_content",
-      "presenter_alpha",
-      "foreground_props",
-      "atmosphere",
-      "kinetic_subtitles"
-    ],
+    "scene_engine": "operator_pack_templates_json",
     "scenario_sfx": "radar_ping",
-    "source_video_review": "PRIVATE_PREVIEW_UNTIL_RIGHTS_CONFIRMED"
+    "package_id": "07_radar_gta6_viral"
   },
   "gta-detail-breakdown": {
     "name": "GTA em Detalhes · Análise",
@@ -413,47 +147,9 @@
     "animation_style": "zoom_pulse",
     "highlight_color": "&H00FDBA&",
     "editorial_guideline": "Foco em uma evidência visual por vez, movimentos suaves de câmera e explicação objetiva. Comparações só quando fontes permitem. CTA com pergunta original.",
-    "scene_engine": "tv_slots_v1",
-    "screen": {
-      "outer_px": [
-        92,
-        225,
-        988,
-        788
-      ],
-      "content_px": [
-        143,
-        291,
-        937,
-        733
-      ],
-      "count": 1,
-      "perspective": "corner_pin",
-      "max_push_in": 0.03,
-      "channel_glitch_frames": 7
-    },
-    "presenter_zone_px": [
-      160,
-      800,
-      920,
-      1388
-    ],
-    "captions_zone_px": [
-      65,
-      1400,
-      1015,
-      1580
-    ],
-    "layers": [
-      "background_plate",
-      "tv_content",
-      "presenter_alpha",
-      "foreground_props",
-      "atmosphere",
-      "kinetic_subtitles"
-    ],
+    "scene_engine": "operator_pack_templates_json",
     "scenario_sfx": "shutter",
-    "source_video_review": "PRIVATE_PREVIEW_UNTIL_RIGHTS_CONFIRMED"
+    "package_id": "08_gta_em_detalhes"
   },
   "gta-hype-reaction": {
     "name": "Vice City Talk · Hype",
@@ -470,46 +166,8 @@
     "animation_style": "pop_card",
     "highlight_color": "&H0080FF&",
     "editorial_guideline": "Comentário entusiasmado com reação do apresentador, cortes de impacto apenas em ênfases e humor pontual. Distinguir opinião de notícia; não fabricar suspense.",
-    "scene_engine": "tv_slots_v1",
-    "screen": {
-      "outer_px": [
-        92,
-        225,
-        988,
-        788
-      ],
-      "content_px": [
-        143,
-        291,
-        937,
-        733
-      ],
-      "count": 1,
-      "perspective": "corner_pin",
-      "max_push_in": 0.03,
-      "channel_glitch_frames": 7
-    },
-    "presenter_zone_px": [
-      160,
-      800,
-      920,
-      1388
-    ],
-    "captions_zone_px": [
-      65,
-      1400,
-      1015,
-      1580
-    ],
-    "layers": [
-      "background_plate",
-      "tv_content",
-      "presenter_alpha",
-      "foreground_props",
-      "atmosphere",
-      "kinetic_subtitles"
-    ],
+    "scene_engine": "operator_pack_templates_json",
     "scenario_sfx": "radio_stinger",
-    "source_video_review": "PRIVATE_PREVIEW_UNTIL_RIGHTS_CONFIRMED"
+    "package_id": "09_vice_city_talk_hype"
   }
 }

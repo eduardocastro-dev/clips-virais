@@ -244,3 +244,27 @@
 .live-source-authorization textarea{width:100%;min-height:75px;resize:vertical}
 @media(max-width:980px){.live-stage-track{grid-template-columns:repeat(5,minmax(0,1fr))}.live-cut-item{flex-wrap:wrap}}
 @media(max-width:620px){.live-stage-track{grid-template-columns:repeat(3,minmax(0,1fr))}.live-production-header{flex-wrap:wrap}}
+
+
+/* YouTube connect, operator template package, and confirmed video cleanup */
+.youtube-integrations-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}
+.youtube-integrations-grid>div{display:grid;align-content:start;gap:12px;padding:14px;border:1px solid #304451;border-radius:9px}
+.youtube-integrations-grid h3{margin:0}
+.youtube-integrations-grid .actions{display:flex;gap:6px;flex-wrap:wrap}
+.youtube-integrations input{width:100%;min-width:0}
+.youtube-integrations .youtube-quota{margin-top:18px;padding:14px;border:1px solid #284956;border-radius:8px}
+.youtube-integrations progress{display:block;width:100%;height:12px;margin-top:10px}
+.templates-package .inline-form{display:flex;align-items:end;gap:12px;flex-wrap:wrap}
+.templates-package input[type=file]{max-width:360px}
+.templates-package .good{display:flex;align-items:center;gap:6px;color:#63d6ad}
+.video-cleanup{display:grid;gap:12px}
+.video-cleanup>button{white-space:nowrap}
+.video-cleanup-discarded{grid-column:1/-1;min-width:270px}
+.video-cleanup-discarded>summary{cursor:pointer;display:flex;align-items:center;gap:7px}
+.video-cleanup-discarded .list-row{display:flex;justify-content:space-between;align-items:center;gap:15px}
+.cleanup-confirmation{position:fixed;inset:0;background:rgba(0,0,0,.70);z-index:1000;display:grid;place-items:center;padding:20px}
+.cleanup-confirm-inner{max-width:610px;width:100%;background:#121f2e;padding:26px;border:1px solid #e17a57;border-radius:12px;box-shadow:0 16px 60px #0009;display:grid;gap:14px}
+.cleanup-confirm-inner h3{display:flex;align-items:center;gap:10px}
+.cleanup-confirm-inner p{line-height:1.65}
+.cleanup-confirm-inner .actions{display:flex;justify-content:flex-end;gap:12px}
+@media(max-width:900px){.youtube-integrations-grid{grid-template-columns:1fr}}

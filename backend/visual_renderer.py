@@ -223,6 +223,7 @@ def montage(video,script,attempt,work):
                                     'url':segment.get('tv_source_url'),
                                     'channel':segment.get('tv_source_channel'),
                                     'date':segment.get('tv_source_date'),
+                                    'requires_onscreen_credit':segment.get('requires_onscreen_credit',False),
                                     'rights_status':segment.get('tv_source_rights'),
                                     'asset_id':segment.get('tv_source_asset_id')}
                         info=render_segment(ff,video,segment,seconds,part,work,
@@ -236,7 +237,11 @@ def montage(video,script,attempt,work):
                                       'REVIEW_REQUIRED' if info['preview_only'] else 'AUTHORIZED',
                                       ('Prévia privada; direitos aguardando autorização.'
                                        if info['preview_only'] else
-                                       'Asset licenciado; proveniência registrada no manifesto da TV.'))
+                                       'Asset licenciado; proveniência registrada no manifesto da TV.'),
+                                      source_start=float(segment.get('source_clip_at') or segment.get('source_offset') or 0),
+                                      source_end=float(segment.get('source_clip_at') or segment.get('source_offset') or 0)+seconds,
+                                      credit=info.get('source_label'),
+                                      requires_onscreen_credit=bool(info.get('requires_onscreen_credit')))
                     elif segment.get('source_clip_path'):
                         _support_clip(ff,segment,seconds,part)
                     else:

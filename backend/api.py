@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any
 from fastapi import FastAPI, Depends, Header, HTTPException, File, Form, UploadFile, Request, Body
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse, HTMLResponse
 from pydantic import BaseModel, Field
 from backend import core as db
 from backend.contracts import Settings, ImportRequest, ProfileRequest, Script, platform_url
@@ -18,6 +18,12 @@ from backend.sources import public_url, seed_default_sources
 @asynccontextmanager
 async def lifespan(app):
     db.init_db()
+    try:
+        from backend.deletion import purge_due
+        purge_due()
+    except Exception:
+        import logging
+        logging.exception('Falha ao conferir exclusões pendentes na inicialização.')
     yield
 
 
@@ -34,8 +40,30 @@ protected = [Depends(auth)]
 
 from backend.api_radar import router as radar_router
 from backend.api_live_groups import router as live_groups_router
+from backend.api_youtube import router as youtube_router
+from backend.api_templates import router as template_package_router
 app.include_router(radar_router, dependencies=protected)
 app.include_router(live_groups_router, dependencies=protected)
+app.include_router(youtube_router, dependencies=protected)
+app.include_router(template_package_router, dependencies=protected)
+
+
+@app.get('/api/youtube/oauth/callback',response_class=HTMLResponse)
+def youtube_oauth_callback(state:str='',code:str='',error:str=''):
+    from backend.youtube_data import oauth_complete,YouTubeError
+    from html import escape
+    if error or not code or not state:
+        return HTMLResponse('<h2>Login Google não concluído.</h2>'
+                            '<p>Volte ao GTA Studio &gt; Integrações e tente novamente.</p>',
+                            status_code=400)
+    try:oauth_complete(state,code)
+    except (ValueError,YouTubeError):
+        return HTMLResponse('<h2>Não foi possível conectar a conta.</h2>'
+                            '<p>Volte ao GTA Studio e use Reconectar.</p>',
+                            status_code=400)
+    return HTMLResponse('<h2>Google conectado ao GTA Studio.</h2>'
+                        '<p>A autorização youtube.readonly foi registrada. '
+                        'Você pode voltar à aba original do Studio.</p>')
 
 
 
@@ -408,6 +436,31 @@ def job_action(id: str, action: str):
 
 
 
+class ClearVideosRequest(BaseModel):
+    expected_total:int=Field(ge=0)
+    confirmation:str=Field(pattern=r'^EXCLUIR_TUDO$')
+
+
+@app.get('/api/videos/deletion-preview',dependencies=protected)
+def preview_deletion():
+    from backend.deletion import summary
+    return summary()
+
+
+@app.post('/api/videos/clear',dependencies=protected)
+def clear_every_video(item:ClearVideosRequest):
+    from backend.deletion import request_clear_all
+    try:return request_clear_all(item.expected_total)
+    except ValueError as exc:raise HTTPException(409,str(exc)) from None
+
+
+@app.post('/api/videos/{id}/restore',dependencies=protected)
+def restore_video_before_delete(id:str):
+    from backend.deletion import restore
+    try:return restore(id)
+    except ValueError as exc:raise HTTPException(409,str(exc)) from None
+
+
 @app.get('/api/videos/{id}/attempts', dependencies=protected)
 def video_attempts(id: str):
     found=db.rows('SELECT id,render_error,final_path,revision FROM videos WHERE id=:id',{'id':id})
@@ -443,15 +496,11 @@ def manual_decision(id: str, item: ManualDecision):
         if item.action=='approve':return {'status':'APPROVED'}
         raise HTTPException(409,'Produção já aprovada; não é possível descartar um item já entregue à fila de publicação.')
     if item.action=='discard':
-        db.execute("UPDATE videos SET manual_decision='discard',manual_by='local_operator',manual_at=:now,"
-                   "status='DISCARDED',approved=0,updated=:now WHERE id=:id",
-                   {'id':id,'now':now})
-        db.execute("UPDATE jobs SET status='PAUSED',lease=NULL WHERE video_id=:id AND status='QUEUED'",{'id':id})
-        db.execute("UPDATE publications SET status='DISCARDED',updated=:now WHERE video_id=:id AND status!='PUBLICADO'",{'id':id,'now':now})
-        db.log_event(id,'diretor','MANUAL_DISCARDED','Descartado pelo operador local.')
-        from backend.production_media import remove_workspace
-        remove_workspace(id)
-        return {'status':'DISCARDED','manual_by':'local_operator','manual_at':now}
+        from backend.deletion import mark_discarded
+        result=mark_discarded(id)
+        db.log_event(id,'diretor','MANUAL_DISCARDED',
+                     'Descartado; exclusão permanente em 2 horas, com restauração disponível.')
+        return {**result,'manual_by':'local_operator','manual_at':now}
     if video['rights'] in ('BLOCKED','REVIEW_REQUIRED') or (video['rights']=='AUTHORIZED' and not video['evidence']):
         raise HTTPException(409,'Direitos de utilização não comprovados. A decisão manual não autoriza uso indevido de mídia.')
     if video['final_path'] and (db.ROOT/video['final_path']).is_file():
@@ -534,7 +583,7 @@ def publication_seo(id: str):
         script = Script.model_validate_json(script_file.read_text('utf-8')).model_dump()
         # Preserve distribution-time credit additions when present.
         script['description'] = data.get('description') or script['description']
-        video = {'title':row['title'], 'url':row['video_url'],
+        video = {'id':row['video_id'], 'title':row['title'], 'url':row['video_url'],
                  'credits':row['credits'], 'test':row['test']}
         seo = build_seo_package(script, video, row['platform'])
         data['seo'] = seo

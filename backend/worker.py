@@ -114,6 +114,10 @@ def scheduler():
     # Keep persisted quota diagnostics current, even in manual mode.
     from backend import daily_quota
     quota = daily_quota.state()
+    if db.get_setting('operator_cleanup_hold_day')==db.today():
+        db.put_setting('scheduler_status',
+                       'Limpeza manual executada; produção automática de hoje suspensa.')
+        return
     if not config.automatic:
         db.put_setting('scheduler_status', 'Modo automático desligado.')
         return
@@ -172,6 +176,8 @@ def prioritized_opportunities(limit=150):
 
 def queue_opportunities():
     config = db.settings()
+    if db.get_setting('operator_cleanup_hold_day')==db.today():
+        return
     if not config.automatic:
         return
     for opportunity in prioritized_opportunities(limit=30):
@@ -199,7 +205,11 @@ def queue_opportunities():
 def perform(job):
     kind = job['kind']
     if kind == 'pipeline':
+        if db.get_setting('video_cancel_requested:'+str(job['video_id']),False):
+            raise PipelineInterrupted('Produção cancelada pelo operador.')
         run_pipeline(job['video_id'])
+        if db.get_setting('video_cancel_requested:'+str(job['video_id']),False):
+            raise PipelineInterrupted('Produção cancelada pelo operador.')
     elif kind.startswith('live_cut:'):
         from backend.live_clip_render import render_clip
         render_clip(kind.split(':',1)[1])
@@ -257,6 +267,11 @@ def perform(job):
 def tick():
     db.put_setting('worker_heartbeat', time.time())
     try:
+        from backend.deletion import tick_cleanup
+        tick_cleanup()
+    except Exception as exc:
+        logging.exception('Falha de limpeza de descarte: %s',type(exc).__name__)
+    try:
         scheduler()
     except Exception as exc:
         message = f'Falha no agendador: {type(exc).__name__}: {exc}'[:350]
@@ -266,6 +281,11 @@ def tick():
         db.put_setting('scheduler_status', 'Parada de emergência ativa.')
         return False
     job = db.claim('worker')
+    if job and job.get('video_id') and db.get_setting(
+            'video_cancel_requested:'+job['video_id'],False):
+        db.execute("""UPDATE jobs SET status='PAUSED',lease=NULL
+                      WHERE id=:id""",{'id':job['id']})
+        return True
     if not job:
         deliver_notifications()
         return False
@@ -294,6 +314,19 @@ def tick():
     thread.start()
     try:
         perform(job)
+        if job.get('video_id'):
+            video_rows=db.rows('SELECT status,discarded_at,manual_decision,approved FROM videos WHERE id=:id',
+                               {'id':job['video_id']})
+            if video_rows:
+                row=video_rows[0]
+                if row.get('discarded_at') and db.get_setting('video_cancel_requested:'+job['video_id'],False):
+                    status='DELETING' if row['status']=='DELETING' else 'DISCARDED'
+                    db.execute('UPDATE videos SET status=:status WHERE id=:id',
+                               {'status':status,'id':job['video_id']})
+                elif (row['status'] in ('REJECTED','FAILED') and not row.get('approved')
+                      and row.get('manual_decision') is None):
+                    from backend.deletion import mark_discarded
+                    mark_discarded(job['video_id'],'reprovação definitiva')
         db.execute("UPDATE jobs SET status='DONE',lease=NULL,error=NULL WHERE id=:id", {'id': job['id']})
     except PipelineInterrupted:
         db.execute("UPDATE jobs SET status='DONE',lease=NULL,error=NULL WHERE id=:id",{'id':job['id']})
@@ -315,7 +348,10 @@ def tick():
                 db.execute("UPDATE videos SET status=:status,error=:error,updated=:now WHERE id=:id AND manual_decision IS NULL",
                            dict(id=job['video_id'], status='PIPELINE_ERROR', error=message, now=time.time()))
                 db.log_event(job['video_id'], 'worker', 'RETRIES_EXHAUSTED',
-                             f'Falha técnica após {attempts} tentativas; retomada manual disponível: {message}')
+                             f'Falha técnica definitiva após {attempts} tentativas: {message}')
+                from backend.deletion import mark_discarded
+                try:mark_discarded(job['video_id'],'esgotou tentativas técnicas')
+                except ValueError:pass
             else:
                 db.execute("UPDATE videos SET status=:status,error=:error,updated=:now WHERE id=:id AND manual_decision IS NULL",
                            dict(id=job['video_id'], status='RETRY', error=message, now=time.time()))

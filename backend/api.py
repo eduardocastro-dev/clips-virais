@@ -493,8 +493,700 @@ def video_attempts(id: str):
     return {'video_id':id,'attempts':items,'render_error':found[0]['render_error']}
 
 
+@app.get('/api/editorial/rejections', dependencies=protected)
+def editorial_rejections():
+    """Current editorial vetoes, saved separately from deleted video files."""
+    from backend.editorial_rejections import active,COOLDOWN_DAYS
+    items=active()
+    return {'items':[{'id':r['id'],'title':r['title'],'source_url':r['source_url'],
+                      'created':r['created'],'expires_at':r['expires_at']} for r in items],
+            'cooldown_days':COOLDOWN_DAYS}
+
+
+@app.delete('/api/editorial/rejections/{entry_id}', dependencies=protected)
+def remove_editorial_rejection(entry_id: str):
+    """Operator can deliberately allow a previously declined topic again."""
+    from backend.editorial_rejections import forget_entry
+    if not forget_entry(entry_id):
+        raise HTTPException(404,'Tema descartado não encontrado ou prazo já encerrado.')
+    db.log_event(None,'diretor','EDITORIAL_REJECTION_REMOVED',
+                 'Operador liberou novamente um tema anteriormente descartado.')
+    return {'removed':True}
+
+
 class ManualDecision(BaseModel):
-    action: str = Field(pattern='^(approve|discard)$')
+    action: str = Field(pattern='^(approve|discard)
+
+
+@app.post('/api/videos/{id}/decision', dependencies=protected)
+def manual_decision(id: str, item: ManualDecision):
+    found=db.rows('SELECT * FROM videos WHERE id=:id',{'id':id})
+    if not found:
+        raise HTTPException(404,'Produção não encontrada.')
+    video=found[0]
+    now=time.time()
+    if video['manual_decision']=='discard':
+        if item.action=='discard':return {'status':'DISCARDED'}
+        raise HTTPException(409,'Produção já descartada; é necessário criar uma nova produção.')
+    if video['manual_decision']=='approved' or video['approved']:
+        if item.action=='approve':return {'status':'APPROVED'}
+        raise HTTPException(409,'Produção já aprovada; não é possível descartar um item já entregue à fila de publicação.')
+    if item.action=='discard':
+        from backend.deletion import mark_discarded
+        result=mark_discarded(id)
+        db.log_event(id,'diretor','MANUAL_DISCARDED',
+                     'Descartado; exclusão permanente em 2 horas, com restauração disponível.')
+        return {**result,'manual_by':'local_operator','manual_at':now}
+    if video['rights'] in ('BLOCKED','REVIEW_REQUIRED') or (video['rights']=='AUTHORIZED' and not video['evidence']):
+        raise HTTPException(409,'Direitos de utilização não comprovados. A decisão manual não autoriza uso indevido de mídia.')
+    if video['final_path'] and (db.ROOT/video['final_path']).is_file():
+        try:
+            approve_rendered(id,manual=True)
+        except (IntegrationError,PipelineInterrupted) as exc:
+            raise HTTPException(409,str(exc)) from None
+        return {'status':'APPROVED','manual_by':'local_operator','manual_at':now,'manual_approval':True}
+    if video['status'] in ('FAILED','AWAITING_MANUAL_DECISION','REJECTED'):
+        raise HTTPException(409,'Não há render disponível para aprovar. Consulte o erro do Editor e execute uma nova produção.')
+    db.execute("UPDATE videos SET manual_decision='approve_pending',manual_by='local_operator',manual_at=:now WHERE id=:id",
+               {'now':now,'id':id})
+    db.log_event(id,'diretor','MANUAL_PENDING','Aprovação será aplicada quando o primeiro render ficar pronto.')
+    return {'status':'APPROVAL_PENDING','manual_by':'local_operator','manual_at':now}
+
+class SourceRightsConfirmation(BaseModel):
+    evidence: str = Field(min_length=15,max_length=3000)
+
+
+@app.post('/api/videos/{id}/source-rights', dependencies=protected)
+def confirm_video_source_rights(id: str, item: SourceRightsConfirmation):
+    """Operator confirms source licenses AFTER a complete, playable preview."""
+    from backend.rights_gate import confirm
+    try:
+        return confirm(id,item.evidence)
+    except (ValueError,IntegrationError) as exc:
+        raise HTTPException(409,str(exc)) from None
+
+
+@app.get('/api/files/{video_id}', dependencies=protected)
+def video_file(video_id: str, attempt: int | None = None):
+    video = db.rows('SELECT final_path,render_error FROM videos WHERE id=:id', {'id': video_id})
+    if not video:
+        raise HTTPException(404, 'Produção não encontrada.')
+    path=video[0]['final_path']
+    if attempt is not None:
+        matches=db.rows('SELECT render_path,render_error FROM video_attempts WHERE video_id=:id AND attempt=:attempt',
+                        {'id':video_id,'attempt':attempt})
+        if not matches:
+            raise HTTPException(404,'Tentativa não encontrada.')
+        path=matches[0]['render_path']
+        if not path:
+            raise HTTPException(409, matches[0]['render_error'] or 'Tentativa sem render: falha técnica.')
+    if not path:
+        raise HTTPException(409,video[0]['render_error'] or 'Render ainda em processamento.')
+    try:
+        file = db.safe_file(path)
+    except ValueError:
+        raise HTTPException(404, 'Vídeo removido pela política de retenção.') from None
+    return FileResponse(file, media_type='video/mp4', filename=video_id + (f'-attempt-{attempt}' if attempt else '') + '.mp4')
+
+
+def _publication_seo_record(id: str):
+    """Use publication IDs and server-owned paths; never trust file paths from clients."""
+    rows = db.rows("SELECT p.*,v.title,v.url AS video_url,v.credits,v.test,v.approved "
+                   "FROM publications p JOIN videos v ON v.id=p.video_id WHERE p.id=:id", {'id':id})
+    if not rows:
+        raise HTTPException(404, 'Publicação não encontrada.')
+    row = rows[0]
+    if not row['approved'] or not row['output_path']:
+        raise HTTPException(409, 'Metadados disponíveis apenas para vídeos aprovados e distribuídos.')
+    path = Path(row['output_path']).parent / f"metadata_{row['video_id']}.json"
+    try:
+        file = db.safe_file(str(path))
+    except ValueError:
+        raise HTTPException(404, 'Arquivo de metadados da publicação não encontrado.') from None
+    return row, file
+
+
+@app.get('/api/publications/{id}/seo', dependencies=protected)
+def publication_seo(id: str):
+    from backend.seo import build_seo_package
+    row, path = _publication_seo_record(id)
+    data = json.loads(path.read_text('utf-8'))
+    seo = data.get('seo')
+    if not seo:
+        script_file = db.ROOT / 'handoff' / row['video_id'] / 'script.json'
+        if not script_file.is_file():
+            raise HTTPException(404, 'Roteiro original não disponível para geração SEO.')
+        script = Script.model_validate_json(script_file.read_text('utf-8')).model_dump()
+        # Preserve distribution-time credit additions when present.
+        script['description'] = data.get('description') or script['description']
+        video = {'id':row['video_id'], 'title':row['title'], 'url':row['video_url'],
+                 'credits':row['credits'], 'test':row['test']}
+        seo = build_seo_package(script, video, row['platform'])
+        data['seo'] = seo
+        db.atomic(path, json.dumps(data, ensure_ascii=False, indent=2))
+    return seo
+
+
+class SeoUpdate(BaseModel):
+    title: str = Field(min_length=1, max_length=100)
+    caption: str = Field(min_length=1, max_length=5000)
+    hashtags: list[str] = Field(max_length=15)
+    tags: list[str] = Field(max_length=30)
+    pinned_comment: str = Field(default='', max_length=300)
+    cover_text: str = Field(default='', max_length=55)
+
+
+@app.put('/api/publications/{id}/seo', dependencies=protected)
+def update_publication_seo(id: str, item: SeoUpdate):
+    from backend.seo import normalize_editor_update
+    row, path = _publication_seo_record(id)
+    if row['status'] == 'PUBLICADO':
+        raise HTTPException(409, 'Publicação já confirmada; metadados históricos preservados.')
+    data = json.loads(path.read_text('utf-8'))
+    if not data.get('seo'):
+        publication_seo(id)
+        data = json.loads(path.read_text('utf-8'))
+    try:
+        seo = normalize_editor_update(item.model_dump(), row['platform'], data['seo'])
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    data['seo'] = seo
+    db.atomic(path, json.dumps(data, ensure_ascii=False, indent=2))
+    return seo
+
+
+@app.get('/api/exports/{video_id}/{platform}', dependencies=protected)
+def export_metadata(video_id: str, platform: str):
+    if platform not in ('youtube', 'tiktok', 'instagram'):
+        raise HTTPException(404, 'Plataforma desconhecida.')
+    rows = db.rows('SELECT output_path FROM publications WHERE video_id=:video AND platform=:platform',
+                   {'video': video_id, 'platform': platform})
+    if not rows or not rows[0]['output_path']:
+        raise HTTPException(404, 'Metadados ainda não disponíveis.')
+    from pathlib import Path
+    rel = Path(rows[0]['output_path']).parent / f'metadata_{video_id}.json'
+    try:
+        file = db.safe_file(str(rel))
+    except ValueError:
+        raise HTTPException(404, 'Metadados não encontrados.') from None
+    return FileResponse(file, media_type='application/json', filename=f'{platform}_{video_id}.json')
+
+
+@app.get('/api/handoffs/{video_id}', dependencies=protected)
+def handoffs(video_id: str):
+    if not db.rows('SELECT id FROM videos WHERE id=:id', {'id': video_id}):
+        raise HTTPException(404, 'Vídeo não encontrado.')
+    return {p.name: json.loads(p.read_text('utf-8')) for p in (db.ROOT / 'handoff' / video_id).glob('*.json')}
+
+
+@app.get('/api/report', dependencies=protected, response_class=PlainTextResponse)
+def report():
+    path = db.ROOT / 'reports' / f'{db.today()}.md'
+    return path.read_text('utf-8') if path.exists() else 'Nenhum relatório gerado hoje.'
+
+
+def template_list():
+    base = json.loads((Path(__file__).resolve().parent.parent / 'templates/catalog.json').read_text('utf-8'))
+    overrides = db.get_setting('templates', {})
+    return {key: {**value, **overrides.get(key, {})} for key, value in base.items()}
+
+
+
+@app.get('/api/videos/{id}/visuals', dependencies=protected)
+def video_visuals(id: str, attempt: int | None = None):
+    if not db.rows('SELECT id FROM videos WHERE id=:id',{'id':id}):
+        raise HTTPException(404,'Produção não encontrada.')
+    if attempt is not None and not 1<=attempt<=100:raise HTTPException(422,'Tentativa inválida.')
+    filename=f'visual-assets-attempt-{attempt}.json' if attempt else 'visual-assets.json'
+    manifest=db.ROOT/'handoff'/id/filename
+    return {'scenes':json.loads(manifest.read_text('utf-8')) if manifest.is_file() else []}
+
+
+@app.get('/api/assets/{id}/preview', dependencies=protected)
+def asset_preview(id:str):
+    from backend import media
+    from backend.assets import safe_asset
+    items=db.rows('SELECT path,media_type FROM assets WHERE id=:id',{'id':id})
+    if not items or not items[0]['path']:raise HTTPException(404,'Arquivo não disponível.')
+    try:source=safe_asset(items[0]['path'])
+    except ValueError:raise HTTPException(404,'Arquivo não encontrado.') from None
+    if items[0]['media_type']!='video' and source.suffix.lower() not in ('.mp4','.webm','.mkv','.mov'):
+        raise HTTPException(422,'Prévia compacta disponível somente para vídeos.')
+    folder=db.ROOT/'cache'/'previews';folder.mkdir(parents=True,exist_ok=True)
+    output=folder/(id+'.mp4')
+    if not output.is_file() or output.stat().st_mtime_ns<source.stat().st_mtime_ns:
+        tmp=folder/(id+'.tmp.mp4')
+        try:
+            media.run([media.binary('ffmpeg'),'-y','-hide_banner','-loglevel','error',
+              '-i',str(source),'-t','3','-an','-vf','scale=270:-2','-c:v','libx264',
+              '-preset','ultrafast','-crf','30','-movflags','+faststart',str(tmp)],timeout=45)
+            tmp.replace(output)
+        except Exception as exc:
+            tmp.unlink(missing_ok=True)
+            raise HTTPException(422,'Prévia de vídeo indisponível: '+str(exc)[:230]) from None
+    return FileResponse(output,media_type='video/mp4')
+
+
+@app.get('/api/assets/{id}/thumbnail', dependencies=protected)
+def asset_thumbnail(id:str):
+    from backend import media
+    from backend.assets import safe_asset
+    from PIL import Image
+    items=db.rows('SELECT path,media_type FROM assets WHERE id=:id',{'id':id})
+    if not items or not items[0]['path']:raise HTTPException(404,'Asset não disponível.')
+    try:source=safe_asset(items[0]['path'])
+    except ValueError:raise HTTPException(404,'Arquivo não encontrado.') from None
+    folder=db.ROOT/'cache'/'thumbnails';folder.mkdir(parents=True,exist_ok=True)
+    output=folder/(id+'.jpg')
+    if not output.is_file() or output.stat().st_mtime_ns<source.stat().st_mtime_ns:
+        temporary=folder/(id+'.tmp.jpg')
+        kind=items[0]['media_type'] or ''
+        try:
+            if kind=='image' or source.suffix.lower() in ('.jpg','.jpeg','.png','.webp','.gif'):
+                with Image.open(source) as im:
+                    im.convert('RGB').resize((240,240)).save(temporary,quality=77)
+            elif kind=='audio' or source.suffix.lower() in ('.mp3','.wav','.m4a'):
+                media.run([media.binary('ffmpeg'),'-y','-i',str(source),'-filter_complex',
+                   'showwavespic=s=240x120:colors=0x38cdd1','-frames:v','1',str(temporary)],timeout=25)
+            else:
+                media.run([media.binary('ffmpeg'),'-y','-ss','1','-i',str(source),
+                  '-frames:v','1','-vf','scale=240:-2','-q:v','6',str(temporary)],timeout=40)
+            temporary.replace(output)
+        except Exception as exc:
+            temporary.unlink(missing_ok=True)
+            raise HTTPException(422,'Não foi possível gerar miniatura: '+str(exc)[:220]) from None
+    return FileResponse(output,media_type='image/jpeg')
+
+
+class AssetsBulk(BaseModel):
+    ids: list[str] = Field(min_length=1,max_length=100)
+    operation: str
+    category: str | None = None
+    confirm_delete: bool = False
+
+@app.post('/api/assets/bulk', dependencies=protected)
+def assets_bulk(item:AssetsBulk):
+    from backend.assets import update_metadata,delete
+    if item.operation not in ('activate','deactivate','recategorize','delete'):
+        raise HTTPException(422,'Operação inválida.')
+    if item.operation=='delete' and not item.confirm_delete:
+        raise HTTPException(409,'Confirmação explícita necessária para excluir assets.')
+    result={'updated':[],'errors':{}}
+    for id in dict.fromkeys(item.ids):
+        try:
+            if item.operation=='delete':delete(id,confirm_children=True)
+            elif item.operation=='activate':update_metadata(id,active=True)
+            elif item.operation=='deactivate':update_metadata(id,active=False)
+            else:update_metadata(id,category=item.category)
+            result['updated'].append(id)
+        except (ValueError,OSError) as exc:result['errors'][id]=str(exc)
+    return result
+
+
+@app.get('/api/assets', dependencies=protected)
+def list_assets():
+    from backend.assets import sync_library
+    sync_library()
+    return {'items':db.rows('SELECT * FROM assets ORDER BY created DESC LIMIT 500')}
+
+
+class AssetPermission(BaseModel):
+    source_class: str
+    evidence: str = Field(min_length=10,max_length=2000)
+
+
+@app.put('/api/assets/{id}/rights', dependencies=protected)
+def update_asset_rights(id: str, item: AssetPermission):
+    from backend.assets import set_license
+    if not db.rows('SELECT id FROM assets WHERE id=:id',{'id':id}):raise HTTPException(404,'Asset não encontrado.')
+    try:set_license(id,item.source_class,item.evidence)
+    except ValueError as exc:raise HTTPException(422,str(exc)) from None
+    return {'updated':True}
+
+
+@app.post('/api/assets/{id}/download', dependencies=protected)
+def download_library_short(id: str):
+    from backend.assets import download_short
+    try:
+        return {'path':download_short(id)}
+    except (ValueError,IntegrationError) as exc:
+        raise HTTPException(409,str(exc)) from None
+
+
+@app.post('/api/assets/upload', dependencies=protected)
+async def upload_asset(kind: str = Form(...),file: UploadFile = File(...)):
+    """Local import. Uploaded files are untrusted until the owner records rights."""
+    from backend.assets import ROOT,KINDS,sync_library
+    import re
+    if kind not in ('shorts','gameplay','images','persona'):raise HTTPException(422,'Use Upload de mídia para este tipo de arquivo.')
+    extension=Path(file.filename or '').suffix.lower()
+    allowed={ 'shorts':{'.mp4'},'gameplay':{'.mp4','.mov','.webm'},
+              'images':{'.png','.jpeg','.jpg','.webp'},
+              'persona':{'.png','.jpeg','.jpg','.webp'}}
+    if extension not in allowed[kind]:raise HTTPException(422,'Extensão não suportada.')
+    stem=re.sub(r'[^a-zA-Z0-9_-]','_',Path(file.filename).stem)[:60] or db.uid()
+    destination=ROOT/kind/(stem+'-'+db.uid()[:8]+extension)
+    partial=destination.with_suffix(destination.suffix+'.partial')
+    size=0
+    try:
+        with partial.open('xb') as stream:
+            while chunk:=await file.read(1024*1024):
+                size+=len(chunk)
+                if size>250*1024*1024:raise HTTPException(413,'Arquivo maior que 250 MB.')
+                stream.write(chunk)
+        if size==0:raise HTTPException(422,'Arquivo vazio.')
+        if kind in ('persona','images'):
+            from PIL import Image
+            with Image.open(partial) as img:img.verify()
+        else:
+            from backend.media import probe
+            info=probe(partial)
+            if not any(x.get('codec_type')=='video' for x in info.get('streams',[])):
+                raise HTTPException(422,'Arquivo não contém vídeo legível.')
+        os.replace(partial,destination)
+        sync_library()
+        found=db.rows('SELECT * FROM assets WHERE path=:path',{'path':str(destination.relative_to(db.ROOT))})
+        if not found:
+            from backend.clips import file_sha256
+            found=db.rows('SELECT * FROM assets WHERE sha256=:sha AND parent_id IS NULL',{'sha':file_sha256(destination)})
+        return {'asset':found[0] if found else None,'permission_required':True,'duplicate':bool(found and found[0]['path']!=str(destination.relative_to(db.ROOT)))}
+    finally:
+        partial.unlink(missing_ok=True)
+
+
+
+class UploadStart(BaseModel):
+    filename: str = Field(min_length=1,max_length=255)
+    size: int = Field(gt=0)
+    category: str = 'outro'
+    tags: list[str] = Field(default_factory=list,max_length=25)
+    source_class: str = 'THIRD_PARTY'
+    evidence: str = Field(default='',max_length=2000)
+    fingerprint: str
+
+
+@app.post('/api/uploads/sessions', dependencies=protected)
+def upload_start(item: UploadStart):
+    from backend.uploads import create_session
+    try:return create_session(item)
+    except ValueError as exc:raise HTTPException(422,str(exc)) from None
+
+
+@app.get('/api/uploads/sessions/{sid}', dependencies=protected)
+def upload_status(sid: str):
+    from backend.uploads import status
+    try:return status(sid)
+    except ValueError as exc:raise HTTPException(404,str(exc)) from None
+
+
+@app.patch('/api/uploads/sessions/{sid}', dependencies=protected)
+async def upload_append(sid: str, request: Request, upload_offset: int = Header(...,alias='Upload-Offset')):
+    from backend.uploads import append_chunk
+    try:return await append_chunk(sid,upload_offset,request.stream())
+    except ValueError as exc:raise HTTPException(409,str(exc)) from None
+
+
+@app.post('/api/uploads/sessions/{sid}/finish', dependencies=protected)
+def upload_finish(sid: str):
+    from backend.uploads import finish
+    try:return finish(sid)
+    except (ValueError, RuntimeError, OSError) as exc:raise HTTPException(422,str(exc)) from None
+
+
+class AssetUpdate(BaseModel):
+    title: str | None = Field(default=None,max_length=300)
+    category: str | None = None
+    tags: list[str] | None = None
+    active: bool | None = None
+
+
+@app.patch('/api/assets/{id}', dependencies=protected)
+def patch_asset(id: str, item: AssetUpdate):
+    from backend.assets import update_metadata
+    try:return {'asset':update_metadata(id,item.title,item.category,item.tags,item.active)}
+    except ValueError as exc:raise HTTPException(422,str(exc)) from None
+
+@app.get('/api/assets/{id}/file', dependencies=protected)
+def asset_file(id: str):
+    import mimetypes
+    found=db.rows('SELECT path FROM assets WHERE id=:id',{'id':id})
+    if not found or not found[0]['path']:raise HTTPException(404,'Asset não baixado ou sem arquivo local.')
+    try:file=db.safe_file(found[0]['path'])
+    except ValueError:raise HTTPException(404,'Arquivo não encontrado.') from None
+    mime=mimetypes.guess_type(file.name)[0] or 'application/octet-stream'
+    return FileResponse(file,media_type=mime)
+
+
+class DeleteAsset(BaseModel):
+    confirm_children: bool = False
+
+
+@app.delete('/api/assets/{id}', dependencies=protected)
+def delete_asset(id: str, payload: DeleteAsset = Body(default=DeleteAsset())):
+    from backend.assets import delete
+    try:
+        if not delete(id,confirm_children=payload.confirm_children):
+            raise HTTPException(404,'Asset não encontrado.')
+    except ValueError as exc:raise HTTPException(409,str(exc)) from None
+    return {'deleted':True}
+
+
+@app.get('/api/persona', dependencies=protected)
+def persona_details():
+    from backend.personas import PRESETS,get_persona
+    return {'presets':PRESETS,'current':get_persona()}
+
+
+class PersonaUpdate(BaseModel):
+    selected: str
+    overrides: dict[str,Any] = Field(default_factory=dict)
+    image_path: str = ''
+    voice_model: str = ''
+
+
+@app.put('/api/persona', dependencies=protected)
+def save_persona(item: PersonaUpdate):
+    from backend.personas import PRESETS,get_persona
+    from backend.assets import safe_asset
+    if item.selected not in PRESETS:raise HTTPException(422,'Escolha uma das três personas originais.')
+    if len(str(item.overrides))>4000:raise HTTPException(422,'Dossiê muito extenso.')
+    if any(k not in ('name','look','personality','voice','opening','closing','catchphrases','never') for k in item.overrides):
+        raise HTTPException(422,'Campo de persona não permitido.')
+    if any(not isinstance(value,str) for key,value in item.overrides.items() if key not in ('catchphrases','never')):
+        raise HTTPException(422,'Campos textuais inválidos.')
+    for field in ('catchphrases','never'):
+        if field in item.overrides and (not isinstance(item.overrides[field],list) or
+            len(item.overrides[field])>12 or any(not isinstance(x,str) or len(x)>160 for x in item.overrides[field])):
+            raise HTTPException(422,f'Lista {field} inválida.')
+    if item.image_path:
+        try:picture=safe_asset(item.image_path)
+        except ValueError:raise HTTPException(422,'Imagem não cadastrada na biblioteca.') from None
+        if not (picture.is_relative_to((db.ROOT/'assets/persona').resolve()) or picture.is_relative_to((db.ROOT/'assets/personas').resolve())):
+            raise HTTPException(422,'Coloque a imagem em assets/persona ou assets/personas/<nome>.')
+    if item.voice_model:
+        from pathlib import Path
+        path=Path(item.voice_model).resolve()
+        if not path.is_file() or path.suffix!='.onnx' or not path.is_relative_to(Path('/models').resolve()):
+            raise HTTPException(422,'Voz deve ser um arquivo .onnx existente na pasta /models.')
+    db.put_setting('persona',item.model_dump())
+    return {'saved':True,'current':get_persona()}
+
+
+
+class CastUpdate(BaseModel):
+    look: str | None = Field(default=None, max_length=500)
+    personality: str | None = Field(default=None, max_length=600)
+    voice: str | None = Field(default=None, max_length=300)
+    voice_model: str | None = Field(default=None, max_length=300)
+    image_path: str | None = Field(default=None, max_length=300)
+    speed: float | None = Field(default=None, ge=0.7, le=1.3)
+    opening: str | None = Field(default=None, max_length=250)
+    closing: str | None = Field(default=None, max_length=250)
+
+
+@app.get('/api/personas', dependencies=protected)
+def list_cast():
+    from backend.personas import get_cast
+    return {'cast':get_cast()}
+
+
+@app.put('/api/personas/{slug}', dependencies=protected)
+def update_cast(slug: str, changes: CastUpdate):
+    from backend.personas import get_cast
+    from backend.assets import safe_asset
+    if slug not in ('dante_palma','lia_varela','caio_rivas'):
+        raise HTTPException(404,'Personagem não encontrado.')
+    data={k:v for k,v in changes.model_dump().items() if v is not None}
+    if 'image_path' in data and data['image_path']:
+        try:
+            img=safe_asset(data['image_path'])
+            if img.suffix.lower() not in ('.png','.jpg','.jpeg','.webp'):
+                raise ValueError('Formato inválido')
+        except ValueError:raise HTTPException(422,'Imagem não encontrada em /assets/') from None
+    if 'voice_model' in data and data['voice_model']:
+        model=Path(data['voice_model']).resolve()
+        if not model.is_file() or model.suffix!='.onnx' or not model.is_relative_to(Path('/models').resolve()):
+            raise HTTPException(422,'Voz Piper precisa existir em /models/*.onnx')
+    existing=db.get_setting('cast',{})
+    existing[slug]={**existing.get(slug,{}),**data}
+    db.put_setting('cast',existing)
+    return {'saved':True,'persona':get_cast()[slug]}
+
+
+@app.get('/api/personas/{slug}/avatar', dependencies=protected)
+def cast_avatar(slug: str):
+    from backend.personas import get_cast
+    from backend.assets import safe_asset
+    info=get_cast().get(slug)
+    if not info or not info.get('image_path'):
+        raise HTTPException(404,'Nenhuma imagem definida para este personagem.')
+    try:img=safe_asset(info['image_path'])
+    except ValueError:raise HTTPException(404,'Imagem da persona não encontrada.') from None
+    return FileResponse(img,media_type='image/png')
+
+
+@app.get('/api/personas/{slug}/sample', dependencies=protected)
+def cast_sample(slug: str):
+    from backend.personas import get_cast
+    from backend.media import binary
+    import subprocess
+    person=get_cast().get(slug)
+    if person is None:raise HTTPException(404,'Personagem não encontrado.')
+    model=Path(person.get('voice_model','')).resolve() if person.get('voice_model') else None
+    if not model or not model.is_file() or not model.is_relative_to(Path('/models').resolve()):
+        raise HTTPException(409,'Configure uma voz Piper existente na pasta /models para ouvir a amostra.')
+    target=db.ROOT/'cache'/('voice-sample-'+slug+'.wav')
+    phrase='GTA seis: vamos separar o que sabemos do que ainda é rumor.'
+    result=subprocess.run([binary('piper'),'--model',str(model),'--length_scale',str(round(1/float(person.get('speed') or 1),3)),'--output_file',str(target)],
+             input=phrase.encode('utf-8'),capture_output=True,timeout=120)
+    if result.returncode or not target.is_file():
+        raise HTTPException(503,'Falha no Piper: '+result.stderr.decode('utf-8',errors='replace')[-300:])
+    return FileResponse(target,media_type='audio/wav')
+
+
+# Persona poses: auth-required, with idempotent validation and no arbitrary paths.
+def _pose_folder(slug:str):
+    if slug not in ('dante_palma','lia_varela','caio_rivas'):
+        raise HTTPException(404,'Personagem inexistente.')
+    from backend.personas import get_cast
+    get_cast()
+    return db.ROOT/'assets'/'personas'/slug/'expressions'
+
+def _pose_manifest(slug:str):
+    folder=_pose_folder(slug)
+    file=folder/'manifest.json'
+    if not file.is_file():raise HTTPException(404,'Galeria não instalada.')
+    return folder,json.loads(file.read_text('utf-8'))
+
+@app.post('/api/personas/{slug}/pose-sheet',dependencies=protected)
+async def upload_pose_reference(slug:str,file:UploadFile=File(...)):
+    from backend.pose_import import save_sheet
+    try:return save_sheet(slug,await file.read())
+    except (ValueError,OSError) as exc:raise HTTPException(422,str(exc)) from None
+
+
+@app.post('/api/personas/{slug}/expressions/import',dependencies=protected)
+async def import_pose_package(slug:str,file:UploadFile=File(...)):
+    from backend.pose_import import import_poses
+    import tempfile
+    try:
+        with tempfile.TemporaryDirectory() as folder:
+            target=Path(folder)/'poses.zip'
+            size=0
+            with target.open('wb') as output:
+                while chunk:=await file.read(1024*1024):
+                    size+=len(chunk)
+                    if size>300*1024*1024:raise HTTPException(413,'Pacote de poses excede 300 MB.')
+                    output.write(chunk)
+            return import_poses(slug,target)
+    except (ValueError,OSError, __import__('zipfile').BadZipFile) as exc:
+        raise HTTPException(422,str(exc)) from None
+
+
+@app.get('/api/personas/{slug}/expressions',dependencies=protected)
+def expressions(slug:str):
+    folder,manifest=_pose_manifest(slug)
+    return {'personagem':slug,'images':[{
+        **image,'exists':(folder/image['file']).is_file(),
+        'url':f'/api/personas/{slug}/expressions/{image["index"]}/file'
+        } for image in manifest['images']]}
+
+@app.get('/api/personas/{slug}/expressions/{index}/file',dependencies=protected)
+def expression_image(slug:str,index:int):
+    folder,manifest=_pose_manifest(slug)
+    record=next((e for e in manifest['images'] if e['index']==index),None)
+    if not record:raise HTTPException(404,'Pose inexistente.')
+    file=folder/record['file']
+    if not file.is_file():raise HTTPException(404,'Arquivo PNG não encontrado.')
+    return FileResponse(file,media_type='image/png')
+
+class ExpressionUpdate(BaseModel):
+    active: bool
+
+@app.patch('/api/personas/{slug}/expressions/{index}',dependencies=protected)
+def expression_active(slug:str,index:int,item:ExpressionUpdate):
+    folder,manifest=_pose_manifest(slug)
+    record=next((e for e in manifest['images'] if e['index']==index),None)
+    if not record:raise HTTPException(404,'Pose inexistente.')
+    if index==1 and not item.active:raise HTTPException(409,'A pose neutra é obrigatória como fallback.')
+    record['active']=item.active
+    db.atomic(folder/'manifest.json',json.dumps(manifest,ensure_ascii=False,indent=2))
+    return {'updated':True}
+
+@app.post('/api/personas/{slug}/expressions/{index}/restore',dependencies=protected)
+def restore_expression(slug:str,index:int):
+    import shutil,hashlib
+    folder,manifest=_pose_manifest(slug)
+    record=next((e for e in manifest['images'] if e['index']==index),None)
+    if not record:raise HTTPException(404,'Pose inexistente.')
+    # Creator-supplied high-resolution master takes precedence; never restore SVG placeholders.
+    template=db.ROOT/'assets'/'personas'/'_quality_master'/slug/record['file']
+    if not template.is_file():
+        raise HTTPException(409,'A pose não possui um master de qualidade. Importe os 24 PNGs antes de restaurar.')
+    dest=folder/record['file'];tmp=folder/(record['file']+'.restoring')
+    shutil.copy2(template,tmp);tmp.replace(dest)
+    record['sha256']=hashlib.sha256(dest.read_bytes()).hexdigest();record['active']=True
+    db.atomic(folder/'manifest.json',json.dumps(manifest,ensure_ascii=False,indent=2))
+    return {'restored':True,'mode':'restored_from_reference_not_ai_generated'}
+
+@app.put('/api/personas/{slug}/expressions/{index}/image',dependencies=protected)
+async def replace_expression(slug:str,index:int,file:UploadFile=File(...)):
+    from PIL import Image
+    from io import BytesIO
+    import hashlib
+    folder,manifest=_pose_manifest(slug)
+    record=next((e for e in manifest['images'] if e['index']==index),None)
+    if not record:raise HTTPException(404,'Pose inexistente.')
+    content=await file.read(12*1024*1024+1)
+    if len(content)>12*1024*1024:raise HTTPException(413,'PNG excede 12 MB.')
+    try:
+        im=Image.open(BytesIO(content))
+        if im.format!='PNG' or im.mode!='RGBA' or im.size!=(1024,1536):
+            raise ValueError('Exigido PNG RGBA 1024x1536.')
+        if any(im.getpixel(c)[3]!=0 for c in [(0,0),(1023,0),(0,1535),(1023,1535)]):
+            raise ValueError('Os quatro cantos devem ser transparentes.')
+        if im.getchannel('A').getbbox() is None:raise ValueError('A imagem não contém personagem.')
+    except (OSError,ValueError) as exc:raise HTTPException(422,str(exc)) from None
+    destination=folder/record['file'];temporary=folder/(record['file']+'.uploading')
+    temporary.write_bytes(content);temporary.replace(destination)
+    record['sha256']=hashlib.sha256(content).hexdigest();record['active']=True
+    db.atomic(folder/'manifest.json',json.dumps(manifest,ensure_ascii=False,indent=2))
+    return {'saved':True}
+
+@app.get('/api/videos/{id}/audio-timeline',dependencies=protected)
+def audio_timeline(id:str,attempt:int|None=None):
+    found=db.rows('SELECT revision FROM videos WHERE id=:id',{'id':id})
+    if not found:raise HTTPException(404,'Produção não encontrada.')
+    a=attempt or found[0]['revision'] or 1
+    path=db.ROOT/'videos'/'processing'/id/f'attempt-{a:02d}'/'audio-timeline.json'
+    if not path.is_file():raise HTTPException(404,'Áudio ainda não renderizado ou medido.')
+    return json.loads(path.read_text('utf-8'))
+
+@app.get('/api/videos/{id}/pose-timeline',dependencies=protected)
+def pose_timeline(id:str,attempt:int|None=None):
+    found=db.rows('SELECT revision FROM videos WHERE id=:id',{'id':id})
+    if not found:raise HTTPException(404,'Produção não encontrada.')
+    a=attempt or found[0]['revision'] or 1
+    path=db.ROOT/'videos'/'processing'/id/f'attempt-{a:02d}'/'pose-timeline.json'
+    if not path.is_file():raise HTTPException(404,'Poses ainda não definidas.')
+    return json.loads(path.read_text('utf-8'))
+
+
+class TemplateEdit(BaseModel):
+    background: str = Field(pattern=r'^0x[0-9a-fA-F]{6}$')
+    accent: str = Field(pattern=r'^0x[0-9a-fA-F]{6}$')
+    font_size: int = Field(ge=36, le=72)
+
+
+@app.put('/api/templates/{name}', dependencies=protected)
+def edit_template(name: str, item: TemplateEdit):
+    if name not in template_list():
+        raise HTTPException(404, 'Template inexistente.')
+    overrides = db.get_setting('templates', {})
+    overrides[name] = item.model_dump()
+    db.put_setting('templates', overrides)
+    return {'saved': True}
+)
 
 
 @app.post('/api/videos/{id}/decision', dependencies=protected)

@@ -32,6 +32,8 @@ const stages=[
   ['READY_FOR_REVIEW','Revisão humana']
 ];
 function stageName(stage:string){
+  const sample=/^TRANSCRIBING_(\d+)_OF_(\d+)$/.exec(stage||'');
+  if(sample)return 'Transcrevendo com WhisperX · janela '+sample[1]+'/'+sample[2];
   const match=/^(DOWNLOADING_EXCERPT|RENDERING|VALIDATING|RENDERED)_(\d+)$/.exec(stage||'');
   if(match)return ({
     DOWNLOADING_EXCERPT:'Obtendo fonte',RENDERING:'Montando layout',
@@ -147,7 +149,7 @@ export default function LiveStudioPanel({token,embedded=false,onActivityChange}:
         <div className="live-stage-track">
           {stages.map(([id,title],i)=>{
             const code=live.stage||'';
-            const currentIndex=stages.findIndex(([key])=>code.startsWith(key));
+            const currentIndex=stages.findIndex(([key])=>code===key||code.startsWith(key+'_'));
             const done=i<currentIndex||code==='READY_FOR_REVIEW'||['REVIEW_PENDING','APPROVED'].includes(live.status);
             return <div className={done?'done':i===currentIndex?'active':''} key={id}>
               <span>{done?<CheckCircle2 size={12}/>:i+1}</span><small>{title}</small>

@@ -65,6 +65,7 @@ def test_auto_queue_continues_past_manual_review_until_daily_limit(client, monke
     # A queued worker can still complete a different Short; the parked one is
     # neither approved, discarded nor put back into the processing queue.
     monkeypatch.setattr(worker,'scheduler',lambda:None)
+    monkeypatch.setattr(daily_quota,'within_deadline',lambda *args,**kwargs:True)
     processed=[]
     monkeypatch.setattr(worker,'perform',lambda job:processed.append(job['video_id']))
     assert worker.tick() is True

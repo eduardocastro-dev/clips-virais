@@ -82,11 +82,24 @@ def test_unavailable_metrics_are_explained_not_fabricated(client,monkeypatch):
 def test_manual_metrics_refresh_enqueues_worker_job(client,monkeypatch):
     _published()
     calls=[]
-    monkeypatch.setattr(worker,'collect_metrics',lambda:calls.append('called') or
+    monkeypatch.setattr(worker,'collect_metrics',lambda force=False:calls.append(force) or
                         {'observed':1,'unavailable':0,'cached':0,'invalid':0})
     response=client.post('/api/analytics/refresh',json={})
     assert response.status_code==200
     assert response.json()['queued']
     job=db.rows("SELECT * FROM jobs WHERE kind='metrics_collect'")[0]
     worker.perform(job)
-    assert calls==['called']
+    assert calls==[True]
+
+
+def test_manual_refresh_requeries_previously_cached_metrics(monkeypatch):
+    _published()
+    observations=[{'viewCount':10},{'viewCount':25}]
+    monkeypatch.setattr(integrations,'public_youtube_metadata',
+                        lambda url:{'metrics':observations.pop(0)})
+    assert integrations.collect_metrics()['observed']==1
+    assert integrations.collect_metrics()['cached']==1
+    assert integrations.collect_metrics(force=True)['observed']==1
+    saved=db.rows('SELECT data FROM metrics ORDER BY observed')
+    assert len(saved)==2
+    assert [json.loads(row['data'])['views'] for row in saved]==[10,25]

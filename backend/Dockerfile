@@ -14,6 +14,8 @@ RUN python -m playwright install --with-deps chromium && chmod -R a+rX /ms-playw
 COPY backend /app/backend
 COPY agents /app/agents
 COPY templates /app/templates
+# Catch SyntaxError/import failures during build instead of failing API healthcheck at runtime.
+RUN python -m compileall -q /app/backend && python -c "from backend.api import app; assert any(route.path == '/health' for route in app.routes)"
 RUN useradd --uid 10001 --create-home studio && mkdir -p /studio && chown studio:studio /studio
 USER studio
 CMD ["uvicorn", "backend.api:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -122,34 +122,7 @@ def list_live_clips():
 
 
 class ClipDecision(BaseModel):
-    decision: str = Field(pattern='^(approve|discard)
-def fetch_live_clip_file(id: str):
-    items=db.rows('SELECT file_path,status FROM live_clips WHERE id=:id',{'id':id})
-    if not items or items[0]['status'] not in ('REVIEW_PENDING','APPROVED') or not items[0]['file_path']:
-        raise HTTPException(404,'Corte não renderizado ou aguardando validação.')
-    try:
-        file=db.safe_file(items[0]['file_path'])
-    except ValueError:
-        raise HTTPException(404,'Arquivo do corte não encontrado.') from None
-    if not file.is_relative_to((db.ROOT/'videos/final/live_cuts').resolve()):
-        raise HTTPException(403,'Arquivo fora da pasta de cortes.')
-    return FileResponse(file,media_type='video/mp4',filename='corte-live-'+id+'.mp4')
-
-
-@router.get('/live-clips/{id}/metadata')
-def fetch_live_clip_metadata(id: str):
-    items=db.rows('SELECT file_path FROM live_clips WHERE id=:id',{'id':id})
-    if not items or not items[0]['file_path']:
-        raise HTTPException(404,'Corte ainda não finalizado.')
-    try:
-        video_file=db.safe_file(items[0]['file_path'])
-    except ValueError:
-        raise HTTPException(404,'Arquivo do corte não encontrado.') from None
-    target=video_file.with_name('metadata.json')
-    if not target.is_relative_to((db.ROOT/'videos/final/live_cuts').resolve()) or not target.is_file():
-        raise HTTPException(404,'Metadados do corte não encontrados.')
-    return json.loads(target.read_text('utf-8'))
-)
+    decision: str = Field(pattern=r'^(approve|discard)$')
 
 
 @router.post('/live-clips/{id}/decision')

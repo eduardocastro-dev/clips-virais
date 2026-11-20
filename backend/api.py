@@ -432,8 +432,8 @@ def confirm(id: str, item: Confirm):
 @app.post('/api/analytics/refresh', dependencies=protected)
 def refresh_analytics():
     """Queue a fresh best-effort observation, without inventing engagement."""
-    job=db.enqueue('metrics_collect',unique_key='metrics:manual:'+db.uid())
-    return {'queued':True,'job_id':job}
+    db.enqueue('metrics_collect',unique_key='metrics:manual:'+db.uid())
+    return {'queued':True}
 
 
 @app.post('/api/jobs/{id}/{action}', dependencies=protected)

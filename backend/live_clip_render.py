@@ -217,7 +217,8 @@ def _score_candidates(transcript: dict, volumes: list[float],
         if score < min_score:
             continue
         indexed.append({'start':max(INTRO_SKIP_SECONDS,round(begin-.25,2)),
-                        'end':round(finish+.30,2),'score':float(score),
+                        'end':round(min(finish+.30,begin+MAX_DURATION-.25),2),
+                        'score':float(score),
                         'type':'destaque com contexto',
                         'transcript':text[:1800],
                         'reason':f'gancho={hook}; contexto={context}; clímax={peak}; '

@@ -218,3 +218,17 @@ def test_2_eligible_segments_do_not_become_3_fake_cuts(monkeypatch):
     with pytest.raises(IntegrationError,match='São necessários 3'):
         render.render_clip(parent)
     assert db.rows('SELECT * FROM live_clip_outputs WHERE parent_id=:id',{'id':parent})==[]
+
+
+def test_existing_cut_from_old_intro_policy_is_not_silently_reused():
+    parent=_parent()
+    child=_output(parent,1,status='REVIEW_PENDING')
+    clip=db.rows('SELECT * FROM live_clips WHERE id=:id',{'id':parent})[0]
+    new_choice={'start':650.,'end':680.,'score':90.}
+    assert live_clip_render._validated_output(clip,1,new_choice) is None
+
+    # An already approved MP4 must not be overwritten during a worker retry.
+    db.execute("UPDATE live_clip_outputs SET status='APPROVED' WHERE id=:id",
+               {'id':child})
+    with pytest.raises(IntegrationError,match='Reprocesse a live'):
+        live_clip_render._validated_output(clip,1,new_choice)

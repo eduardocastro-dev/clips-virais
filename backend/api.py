@@ -465,6 +465,20 @@ def manual_decision(id: str, item: ManualDecision):
     db.log_event(id,'diretor','MANUAL_PENDING','Aprovação será aplicada quando o primeiro render ficar pronto.')
     return {'status':'APPROVAL_PENDING','manual_by':'local_operator','manual_at':now}
 
+class SourceRightsConfirmation(BaseModel):
+    evidence: str = Field(min_length=15,max_length=3000)
+
+
+@app.post('/api/videos/{id}/source-rights', dependencies=protected)
+def confirm_video_source_rights(id: str, item: SourceRightsConfirmation):
+    """Operator confirms source licenses AFTER a complete, playable preview."""
+    from backend.rights_gate import confirm
+    try:
+        return confirm(id,item.evidence)
+    except (ValueError,IntegrationError) as exc:
+        raise HTTPException(409,str(exc)) from None
+
+
 @app.get('/api/files/{video_id}', dependencies=protected)
 def video_file(video_id: str, attempt: int | None = None):
     video = db.rows('SELECT final_path,render_error FROM videos WHERE id=:id', {'id': video_id})

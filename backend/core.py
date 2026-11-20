@@ -280,7 +280,7 @@ def production_usage(connection=None):
     """
     begin,end=local_day_bounds()
     statement=text("""SELECT COUNT(*) FROM videos WHERE test=0 AND (
-        (status IN ('QUEUED','PROCESSING','RETRY') AND created>=:start AND created<:end)
+        (status IN ('QUEUED','PROCESSING','RETRY','PENDING_RIGHTS_REVIEW') AND created>=:start AND created<:end)
         OR (status='APPROVED' AND COALESCE(approved_at,created)>=:start AND COALESCE(approved_at,created)<:end)
     )""")
     if connection is not None:

@@ -146,6 +146,36 @@ def montage(video,script,attempt,work):
     from backend import assets,media
     ff=media.binary('ffmpeg')
     visuals=assets.select_visuals(video,script)
+    from backend.scenarios import template_for,select_beats
+    if template_for(video.get('template')):
+        try:
+            transcript=json.loads((work/'transcript.json').read_text('utf-8'))
+        except (OSError,ValueError):
+            transcript=None
+        beats=select_beats(transcript,float(script.duration))
+        aligned=[]
+        for scene_visual in visuals:
+            pieces=scene_visual.get('segments') or []
+            cursor=float(scene_visual['start'])
+            scene_end=float(scene_visual['end'])
+            for i in range(len(pieces)-1):
+                expected=cursor+float(pieces[i]['duration'])
+                choices=[t for t in beats if abs(t-expected)<=.18
+                         and t-cursor>=.80 and
+                         scene_end-t>=.80 and
+                         float(pieces[i+1]['duration'])+(expected-t)>=.80]
+                if choices:
+                    change=min(choices,key=lambda t:abs(t-expected))
+                    previous=float(pieces[i]['duration'])
+                    pieces[i]['duration']=round(change-cursor,3)
+                    pieces[i+1]['duration']=round(
+                        float(pieces[i+1]['duration'])+previous-
+                        float(pieces[i]['duration']),3)
+                    aligned.append({'at':change,'from':expected,'method':'asr_word_start'})
+                cursor+=float(pieces[i]['duration'])
+        db.atomic(work/'tv-switch-beats.json',
+                  json.dumps({'aligned':aligned,'measured_word_beats':len(beats),
+                              'glitch_frames':7},ensure_ascii=False,indent=2))
     db.atomic(db.ROOT/'handoff'/video['id']/f'visual-assets-attempt-{attempt}.json',
               json.dumps(visuals,indent=2,ensure_ascii=False))
     durations=[float(part.get('duration') or 0) for scene in visuals for part in scene.get('segments',[])]
@@ -159,6 +189,7 @@ def montage(video,script,attempt,work):
     db.atomic(db.ROOT/'handoff'/video['id']/f'visual-rhythm-attempt-{attempt}.json',
               json.dumps(report,ensure_ascii=False,indent=2))
     cuts=[]
+    tv_rights=[]
     segment_cache=db.ROOT/'videos/processing'/video['id']/'segment-cache';segment_cache.mkdir(parents=True,exist_ok=True)
     for scene_index,(scene,spec) in enumerate(zip(script.scenes,visuals)):
         duration=round(scene.end-scene.start,3)
@@ -179,9 +210,34 @@ def montage(video,script,attempt,work):
             key=hashlib.sha256(json.dumps(signature,sort_keys=True,default=str).encode()).hexdigest()
             cache=segment_cache/(key+'.mp4')
             try:
-                if cache.is_file() and cache.stat().st_size>1000:shutil.copy2(cache,part)
+                from backend.scenarios import template_for
+                if (not template_for(video.get('template'))) and cache.is_file() and cache.stat().st_size>1000:
+                    shutil.copy2(cache,part)
                 else:
-                    if segment.get('source_clip_path'):
+                    from backend.scenarios import template_for
+                    if template_for(video.get('template')):
+                        from backend.scenario_renderer import render_segment
+                        source=None
+                        if segment.get('tv_source_path'):
+                            source={'path':segment['tv_source_path'],
+                                    'url':segment.get('tv_source_url'),
+                                    'channel':segment.get('tv_source_channel'),
+                                    'date':segment.get('tv_source_date'),
+                                    'rights_status':segment.get('tv_source_rights'),
+                                    'asset_id':segment.get('tv_source_asset_id')}
+                        info=render_segment(ff,video,segment,seconds,part,work,
+                                            scene_index*100+segment_index,source)
+                        segment['tv_slot']=info
+                        tv_rights.append(info)
+                        from backend.source_preview import record_rights
+                        record_rights(video['id'],str(info.get('tv_source_url') or ''),
+                                      str(segment.get('tv_source_asset_id') or
+                                          segment.get('asset_id') or '') or None,
+                                      'REVIEW_REQUIRED' if info['preview_only'] else 'AUTHORIZED',
+                                      ('Prévia privada; direitos aguardando autorização.'
+                                       if info['preview_only'] else
+                                       'Asset licenciado; proveniência registrada no manifesto da TV.'))
+                    elif segment.get('source_clip_path'):
                         _support_clip(ff,segment,seconds,part)
                     else:
                         _filtered_base(ff,segment,seconds,part,work,scene_index*100+segment_index)
@@ -190,6 +246,14 @@ def montage(video,script,attempt,work):
                 db.log_event(video['id'],'media','RENDER_ERROR',f'Cena {scene_index+1}: {exc}'[:500])
                 raise media.PreflightError(f'Falha real de composição na cena {scene_index+1}, trecho {segment_index+1}: {exc}') from exc
             cuts.append(part)
+    if tv_rights:
+        db.atomic(db.ROOT/'handoff'/video['id']/f'tv-sources-attempt-{attempt}.json',
+                  json.dumps(tv_rights,indent=2,ensure_ascii=False))
+    # Regenerate the per-attempt manifest after slot construction.
+    db.atomic(db.ROOT/'handoff'/video['id']/f'visual-assets-attempt-{attempt}.json',
+              json.dumps(visuals,indent=2,ensure_ascii=False))
+    db.atomic(db.ROOT/'handoff'/video['id']/'visual-assets.json',
+              json.dumps(visuals,indent=2,ensure_ascii=False))
     if not cuts:raise IntegrationError('Nenhum visual criado na montagem.')
     # Re-encode concatenated clips to avoid timestamp drift between segments.
     listing=work/'visuals.txt'

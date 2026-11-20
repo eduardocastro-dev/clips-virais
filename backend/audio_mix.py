@@ -13,14 +13,17 @@ TARGET_LUFS = -14.0
 TARGET_TRUE_PEAK = -1.5
 
 
-def sfx_positions(duration, events=None):
+def sfx_positions(duration, events=None, all_tv_cuts=False):
     """Cue only the opening and actual edit boundaries, not arbitrary 5s intervals."""
-    candidates = [0.22] + [float(x) for x in (events or [])[2::3]]
+    # TV channel-change SFX must match the actual montage frame; regular
+    # legacy edits keep their original, less frequent accent behaviour.
+    candidates = ([0.22]+[float(x) for x in (events or [])]
+                  if all_tv_cuts else [0.22]+[float(x) for x in (events or [])[2::3]])
     result = []
     for value in candidates:
         if 0 <= value <= float(duration) - .65 and not any(abs(value - prev) < .35 for prev in result):
             result.append(round(value, 3))
-    return result[:7]
+    return result[:24 if all_tv_cuts else 7]
 
 
 def mix(video_id, path, work, duration, events=None):
@@ -57,7 +60,11 @@ def mix(video_id, path, work, duration, events=None):
         graph.append('[music][voice]sidechaincompress=threshold=0.045:ratio=8:attack=12:release=250[ducked]')
         graph.append('[voice][ducked]amix=inputs=2:duration=first:dropout_transition=0[voicemusic]')
         audio = '[voicemusic]'
-    cue_times = sfx_positions(duration, events) if effects else []
+    from backend.scenarios import template_for
+    rows=db.rows('SELECT template FROM videos WHERE id=:id',{'id':video_id})
+    scenario=template_for(rows[0]['template']) if rows else None
+    cue_times = (sfx_positions(duration,events,all_tv_cuts=bool(scenario))
+                 if effects else [])
     if fx_index is not None and cue_times:
         labels = ''.join(f'[fx{i}]' for i in range(len(cue_times)))
         graph.append(f'[{fx_index}:a]atrim=0:0.45,asetpts=PTS-STARTPTS,asplit={len(cue_times)}{labels}')
@@ -80,7 +87,9 @@ def mix(video_id, path, work, duration, events=None):
                 'voice_is_priority': True, 'music_ducking': bool(music),
                 'selected_music_id': music['id'] if music else None,
                 'sfx': [{'asset_id':effects['id'], 'at_seconds':t, 'at_frame':round(t*30),
-                         'license_evidence':effects['evidence'], 'volume_ratio':0.09}
+                         'license_evidence':effects['evidence'],
+                         'sync':'tv_channel_glitch' if scenario else 'montage_cut',
+                         'volume_ratio':0.09}
                         for t in cue_times] if effects else []}
     db.atomic(work/'sfx_map.json', json.dumps(manifest, ensure_ascii=False, indent=2))
     for asset_id in selected:

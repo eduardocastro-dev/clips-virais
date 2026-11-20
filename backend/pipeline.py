@@ -301,6 +301,8 @@ def approve_rendered(video_id, manual=False, by='local_operator'):
         raise PipelineInterrupted('Produção descartada.')
     if video['rights'] in ('BLOCKED','REVIEW_REQUIRED') or (video['rights']=='AUTHORIZED' and not video['evidence']):
         raise IntegrationError('Aprovação bloqueada: direitos de uso não verificados.')
+    from backend.rights_gate import require_clearance
+    require_clearance(video)
     if not video['final_path'] or not (db.ROOT/video['final_path']).is_file():
         raise IntegrationError('Não existe render para aprovar.')
     if manual:
@@ -404,6 +406,23 @@ def run_pipeline(video_id):
         if decided_template != video.get('template'):
             db.execute('UPDATE videos SET template=:tpl WHERE id=:id', {'tpl': decided_template, 'id': video_id})
             video['template'] = decided_template
+    # Same-day scenario variety applies only to subsequent automated, real Shorts.
+    if not video.get('test') and config.automatic:
+        from backend.scenarios import SCENARIOS
+        start,end=db.local_day_bounds()
+        last=db.rows("""SELECT template FROM videos WHERE id!=:id AND test=0
+            AND created>=:start AND created<:end AND status IN
+            ('APPROVED','AWAITING_MANUAL_DECISION','PENDING_RIGHTS_REVIEW')
+            ORDER BY created DESC LIMIT 1""",
+            {'id':video_id,'start':start,'end':end})
+        if last and video['template']==last[0]['template'] and video['template'] in SCENARIOS:
+            options=list(SCENARIOS)
+            selected=options[(options.index(video['template'])+1)%len(options)]
+            db.execute('UPDATE videos SET template=:tpl WHERE id=:id',
+                       {'tpl':selected,'id':video_id})
+            video['template']=selected
+            db.log_event(video_id,'diretor','TEMPLATE_VARIATION',
+                         'Cenário consecutivo evitado: '+selected)
     template_info = media.template(video['template'])
     db.artifact(video_id,'diretor',data={
         'daily_limit':config.daily_limit,
@@ -482,6 +501,21 @@ def run_pipeline(video_id):
                 return
             stage(video_id,'avaliador')
             result=evaluate(video,script,final)
+            # Complete the technical and editorial pipeline BEFORE asking the
+            # operator to confirm rights for a private source-footage preview.
+            from backend.rights_gate import requires_review,pending_sources
+            if requires_review(video):
+                store_attempt(video_id,attempt,result,final)
+                pending=pending_sources(video_id)
+                explanation=('Prévia finalizada. '+str(len(pending))+
+                             ' fonte(s) da TV aguardam autorização. '
+                             'Confirme em Video Studio ou descarte a produção.')
+                db.execute("""UPDATE videos SET status='PENDING_RIGHTS_REVIEW',
+                    stage='diretor',approved=0,error=:reason,updated=:now WHERE id=:id""",
+                    {'id':video_id,'reason':explanation,'now':time.time()})
+                db.log_event(video_id,'diretor','PREVIEW_READY_RIGHTS_PENDING',explanation)
+                db.notify('rights-review:'+video_id,explanation)
+                return
         except PipelineInterrupted:
             return
         except __import__('backend.assets',fromlist=['MissingAssetsError']).MissingAssetsError as exc:

@@ -82,6 +82,7 @@ def transcribe(path, auto_language=False):
 def subtitles(script, style, target, transcript=None, styled_hook=False):
     """Readable cinematic captions from measured word timestamps or real TTS phrases."""
     from backend.viral_edit import caption_groups, short_cta
+    scenario=bool(style.get('scenario_tv'))
     lines = ['[Script Info]', 'ScriptType: v4.00+', 'PlayResX: 1080', 'PlayResY: 1920', '[V4+ Styles]',
              'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
              f'Style: Default,DejaVu Sans,{max(46,min(68,int(style["font_size"])+6))},&H00FFFFFF,&H00FFFFFF,&H00101321,&H80000000,-1,0,0,0,100,100,0,0,1,5,2,2,90,90,850,1',
@@ -91,19 +92,19 @@ def subtitles(script, style, target, transcript=None, styled_hook=False):
     badge = clean_subtitle(str(style.get('badge') or 'GTA 6')).upper()[:24]
     lines.append(fr'Dialogue: 0,0:00:00.00,0:00:02.25,Badge,,0,0,0,,{{\an8\pos(540,94)\fad(80,100)\1c&H00F4FF&}}★ {badge} ★')
     if not styled_hook:
-        hook = r'\N'.join(textwrap.wrap(clean_subtitle(script.hook), 23)[:3])
-        lines.append(fr'Dialogue: 0,0:00:00.16,0:00:02.40,Header,,0,0,0,,{{\an8\pos(540,245)\fad(90,130)\fscx104\fscy104}}{hook}')
+        hook = r'\N'.join(textwrap.wrap(clean_subtitle(script.hook), 23)[:2 if scenario else 3])
+        lines.append(fr'Dialogue: 0,0:00:00.16,0:00:02.40,Header,,0,0,0,,{{\an8\pos(540,{1660 if scenario else 245})\fad(90,130)\fscx104\fscy104}}{hook}')
     if script.cta:
         # The old three-second CTA at Y=1350 obscured the presenter and the video.
         cta = short_cta(clean_subtitle(script.cta))
         lines.append(f'Dialogue: 2,{subtitle_time(max(0,script.duration-2.1))},'
                      f'{subtitle_time(script.duration-.12)},Header,,0,0,0,,'
-                     fr'{{\an5\pos(540,740)\fs47\fad(90,140)\bord5}}{cta}')
+                     fr'{{\an5\pos(540,{1800 if scenario else 740})\fs47\fad(90,140)\bord5}}{cta}')
     for index, scene in enumerate(script.scenes):
         # Do not repeat the same full-screen headline through every scene.
         begin=max(2.55, float(scene.start)+.10)
         end=min(float(scene.end),begin+1.15)
-        if end>begin+.20 and index>0:
+        if end>begin+.20 and index>0 and not scenario:
             text=r'\N'.join(textwrap.wrap(clean_subtitle(scene.text),24)[:2])
             lines.append(f'Dialogue: 0,{subtitle_time(begin)},{subtitle_time(end)},'
                          fr'Header,,0,0,0,,{{\an8\pos(540,248)\fs49\fad(100,120)}}{text}')
@@ -141,9 +142,9 @@ def subtitles(script, style, target, transcript=None, styled_hook=False):
             text=clean_subtitle(str(phrase.get('text') or '')).strip()
             if not text or end<=start:
                 continue
-            wrapped=textwrap.wrap(text, 28)
-            if len(wrapped)>3:
-                wrapped=wrapped[:3]
+            wrapped=textwrap.wrap(text, 26 if scenario else 28)
+            if len(wrapped)>(2 if scenario else 3):
+                wrapped=wrapped[:2 if scenario else 3]
                 wrapped[-1]=wrapped[-1].rstrip(' ,.;')+'…'
             words=r'\N'.join(wrapped)
             lines.append(f'Dialogue: 1,{subtitle_time(start)},{subtitle_time(min(end,script.duration))},'
@@ -158,7 +159,10 @@ def subtitles(script, style, target, transcript=None, styled_hook=False):
                 end=scene.start+(scene.end-scene.start)*(i+1)/max(1,len(chunks))
                 lines.append(f'Dialogue: 1,{subtitle_time(start)},{subtitle_time(end)},'
                              'Default,,0,0,0,,{\\an2\\pos(540,1000)\\fad(60,70)}'+chunk)
-    target.write_text('\n'.join(lines), encoding='utf-8')
+    content='\n'.join(lines)
+    if scenario:
+        content=content.replace(r'\pos(540,1000)',r'\pos(540,1530)')
+    target.write_text(content, encoding='utf-8')
 
 
 def narration(script, work, test=False):
@@ -173,16 +177,23 @@ def render(video, script: Script, attempt=1):
     work=db.ROOT/'videos/processing'/video['id']/f'attempt-{attempt:02d}'
     work.mkdir(parents=True,exist_ok=True)
     style=template(script.template)
+    from backend.scenarios import template_for
+    scenario=bool(template_for(script.template))
+    style['scenario_tv']=scenario
     # Mandatory input check BEFORE invoking TTS, FFmpeg or evaluator.
     from backend.assets import mandatory_assets, MissingAssetsError, sync_library
     sync_library()
     missing=mandatory_assets(script=script)
+    if scenario and 'assets/gameplay/' in missing:
+        from backend.source_preview import ensure
+        if ensure(video):
+            missing.remove('assets/gameplay/')
     if missing:
         raise MissingAssetsError(missing)
     from backend.text_styles import active_style, render_hook
     chosen_text_style=active_style()
     hook_overlay=(render_hook(script.hook,work/'text-style-hook.png',chosen_text_style)
-                  if chosen_text_style else None)
+                  if chosen_text_style and not scenario else None)
     audio=narration(script,work,bool(video['test']))
     # Forced word timestamp alignment for real videos (Whisper local).
     # Never label estimated phrase timings as synchronized subtitles.
@@ -202,6 +213,17 @@ def render(video, script: Script, attempt=1):
         raise PreflightError('Nenhum alinhamento temporal disponível (ASR e TTS).')
     if transcript:db.atomic(work/'transcript.json',json.dumps(transcript,ensure_ascii=False))
     visual,visuals=montage(video,script,attempt,work)
+    rim=[]
+    if scenario:
+        for scene_visual in visuals:
+            for segment in scene_visual.get('segments',[]):
+                sampled=(segment.get('tv_slot') or {}).get('screen_tint_rgb')
+                if isinstance(sampled,list) and len(sampled)==3:
+                    rim.append(sampled)
+    tint=[sum(p[i] for p in rim)/len(rim) for i in range(3)] if rim else None
+    rim_filter=(',colorbalance=rs={:.3f}:gs={:.3f}:bs={:.3f}'.format(
+        *(max(-.10,min(.10,(channel-127)/127*.10)) for channel in tint))
+        if tint else '')
     subtitle_file=work/'subtitles.ass'
     subtitles(script,style,subtitle_file,transcript,styled_hook=bool(hook_overlay))
     # Every used third-party clip is attributed visibly at the right timestamp.
@@ -210,7 +232,7 @@ def render(video, script: Script, attempt=1):
         t=scene.start
         for part in item.get('segments',[]):
             duration=float(part.get('duration') or 0)
-            if part.get('source_class')=='THIRD_PARTY':
+            if part.get('source_class')=='THIRD_PARTY' and not scenario:
                 credit=(part.get('credits') or part.get('source') or '').strip()
                 if credit:
                     credit=clean_subtitle('Fonte: '+credit)[:75].replace(',', ' ')
@@ -225,7 +247,7 @@ def render(video, script: Script, attempt=1):
     args=[ff,'-y','-i',str(visual),'-i',str(audio)]
     # Use a transparent 24-pose expression per segment; each input remains immutable.
     from backend.personas import expression_file
-    graph=['[0:v]ass=subtitles.ass[base]']
+    graph=['[0:v]format=rgba[base]'] if scenario else ['[0:v]ass=subtitles.ass[base]']
     current='base'
     if hook_overlay:
         # Generated from the live script and licensed inputs, not EPS example text.
@@ -255,16 +277,25 @@ def render(video, script: Script, attempt=1):
         previous_emotion_by_speaker[who]=actual
         args+=['-loop','1','-framerate','1','-i',str(avatar)]
         input_index=idx+(3 if hook_overlay else 2)
-        graph.append(f'[{input_index}:v]scale=880:1010:force_original_aspect_ratio=decrease,format=rgba[avatar{idx}]')
+        if scenario:
+            graph.append(f'[{input_index}:v]scale=610:580:force_original_aspect_ratio=decrease,'
+                         f'format=rgba{rim_filter}[avatar{idx}]')
+        else:
+            graph.append(f'[{input_index}:v]scale=880:1010:force_original_aspect_ratio=decrease,format=rgba[avatar{idx}]')
         label=f'overlay{idx}'
         start,end=section['start'],section['end']
-        side_x='38' if idx%2==0 else 'W-w-155'
-        graph.append(f"[{current}][avatar{idx}]overlay=x={side_x}:y=1110+9*sin(2*PI*t/2.7):enable='between(t,{start:.3f},{end:.3f})'[{label}]")
+        side_x='(W-w)/2' if scenario else ('38' if idx%2==0 else 'W-w-155')
+        pose_y='800' if scenario else '1110+9*sin(2*PI*t/2.7)'
+        graph.append(f"[{current}][avatar{idx}]overlay=x={side_x}:y={pose_y}:enable='between(t,{start:.3f},{end:.3f})'[{label}]")
         current=label
         pose_report.append({'speaker':who,'requested_emotion':section['emotion'],'emotion':actual,
                             'file':str(avatar.relative_to(db.ROOT)),'start':start,'end':end,'layout':'bust','side':'left' if idx%2==0 else 'right',
-                            'scale_px':[880,1010], 'safe_zone':'face_above_bottom_18_percent'})
+                            'scale_px':[610,580] if scenario else [880,1010],
+                             'safe_zone':'presenter_800_1388' if scenario else 'face_above_bottom_18_percent'})
     db.atomic(work/'pose-timeline.json',json.dumps(pose_report,ensure_ascii=False,indent=2))
+    if scenario:
+        graph.append(f'[{current}]ass=subtitles.ass[captioned]')
+        current='captioned'
     args+=['-filter_complex',';'.join(graph),'-map',f'[{current}]']
     args+=['-map','1:a:0','-t',str(script.duration),'-c:v','libx264','-preset','veryfast','-crf','22',
            '-pix_fmt','yuv420p','-r','30','-c:a','aac','-b:a','192k',

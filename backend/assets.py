@@ -164,6 +164,9 @@ def select_visuals(video,script):
     """
     from backend import production_media
     folder=production_media.workspace(video['id'])
+    from backend.scenarios import template_for
+    from backend.source_preview import ensure as ensure_source
+    tv_source=ensure_source(video) if template_for(video.get('template')) else None
     # Parent long videos are never used alongside their sliced children.
     candidates=db.rows("""SELECT a.* FROM assets a WHERE a.status='READY'
       AND a.rights_status='AUTHORIZED' AND COALESCE(a.active,1)=1 AND a.path IS NOT NULL
@@ -244,6 +247,10 @@ def select_visuals(video,script):
                 penalty=3 if origin==last_parent else 0
                 count=local_usage.get(a['id'],0)+int(a.get('usage_count') or 0)
                 eligible.append((a,overlap,penalty,count))
+            if not eligible and tv_source:
+                # Private preview only: unverified source is never added to
+                # the ordinary library candidates eligible for publication.
+                eligible.append((tv_source,0,0,0))
             if eligible:
                 # Sort first by theme and different parent; then balance usage.
                 eligible.sort(key=lambda q:(-q[1],q[2],q[3],q[0]['id']))
@@ -256,11 +263,22 @@ def select_visuals(video,script):
                      'category':chosen.get('category'),'tags':json.loads(chosen.get('tags') or '[]')}
                 if chosen.get('media_type')=='video' and chosen.get('duration'):
                     seg['source_offset']=max(0., min(float(chosen['duration'])-take, (index+pi)*2.))
-                if chosen['source_class']=='THIRD_PARTY':third_seconds+=take
+                if chosen['source_class']=='THIRD_PARTY' and chosen.get('rights_status')=='AUTHORIZED':
+                    third_seconds+=take
                 last_id=chosen['id'];last_parent=parent
                 local_usage[chosen['id']]=local_usage.get(chosen['id'],0)+1
             else:
                 raise MissingAssetsError(['assets/gameplay/'], 'Nenhum vídeo/imagem licenciado e ativo corresponde à cena '+str(index+1))
+            if tv_source:
+                seg['tv_source_path']=tv_source['path']
+                seg['tv_source_url']=tv_source['url']
+                seg['tv_source_rights']=tv_source['rights_status']
+                seg['tv_source_asset_id']=tv_source['id']
+                seg['tv_source_channel']=tv_source.get('channel','')
+                try:
+                    seg['tv_source_date']=json.loads(tv_source.get('metadata') or '{}').get('source_date','')
+                except (TypeError,ValueError):
+                    seg['tv_source_date']=''
             segments.append(seg)
         # Stagger article screenshot/card over some scene segments, never full article mirrors.
         if segments:
@@ -306,6 +324,7 @@ def select_visuals(video,script):
                     support_seconds+=excerpt
         primary=segments[0]
         result.append({'scene':index,'start':scene.start,'end':scene.end,'segments':segments,
+                       'tv_source_asset_id':tv_source['id'] if tv_source else None,
                        'type':primary['type'],'path':primary.get('path'),'asset_id':primary.get('asset_id'),
                        'source':primary['source'],'source_class':primary['source_class'],
                        'credits':primary.get('credits',''), 'support_seconds':third_seconds,

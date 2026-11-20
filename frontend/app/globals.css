@@ -195,3 +195,12 @@
 .publication-group-row-actions>form input{flex:1;min-width:150px}.publication-group-row-actions>form button{flex-shrink:0}
 @media(max-width:1100px){.ops-columns,.ops-bottom{grid-template-columns:1fr}.publication-group-heading{flex-wrap:wrap}.publication-group-actions{flex-direction:row;width:100%}}
 @media(max-width:700px){.ops-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.ops-title{flex-wrap:wrap}.publication-group-cover{width:45px;height:56px}.publication-group-heading{padding:14px;gap:10px}.publication-group-info{flex-basis:calc(100% - 65px)}.publication-group-actions{flex-direction:column}.publication-group-row-actions>form{flex-wrap:wrap;min-width:0}.publication-group-row-actions>form button{width:100%}}
+
+/* Private post-render source-rights review. No publication link until release. */
+.rights-preview-card{margin:16px 0;padding:18px;border:1px solid #b98548;border-left:5px solid #f0b861;background:#32271d;border-radius:10px;display:grid;gap:10px}
+.rights-preview-card h3{margin:0;color:#ffdb9e;font-size:15px}
+.rights-preview-card p{font-size:12px;line-height:1.6;color:#f0ddc4;margin:0}
+.rights-preview-card form{display:grid;gap:12px}
+.rights-preview-card textarea{display:block;width:100%;min-height:92px;margin-top:8px;border:1px solid #94744d;border-radius:7px;background:#17212c;color:#fff;resize:vertical}
+.rights-preview-card button{justify-self:start}
+.rights-preview-card button:disabled{opacity:.5;cursor:not-allowed}

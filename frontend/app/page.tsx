@@ -15,7 +15,7 @@ type Row = Record<string, any>;
 type State = {cast:Row;daily_production_usage:number;settings:Row;assets:Row[];persona:Row;videos:Row[];publications:Row[];profiles:Row[];sources:Row[];opportunities:Row[];notifications:Row[];events:Row[];jobs:Row[];metrics:Row[];usage:Row[];worker_online:boolean;scheduler_status?:string;agents:string[];templates:Record<string,Row>;secrets:string[]};
 const tabs = [{name:'Dashboard',icon:LayoutDashboard},{name:'Viral Radar',icon:Radar},{name:'Cortes de Lives',icon:Film},{name:'Importar por URL',icon:Import},{name:'Video Studio',icon:Clapperboard},{name:'Upload de mídia',icon:Import},{name:'Biblioteca de assets',icon:Film},{name:'Fontes e Efeitos',icon:Film},{name:'Prontos para postar',icon:Download},{name:'Analytics',icon:Activity},{name:'Agentes',icon:Users},{name:'Configurações',icon:Settings2}];
 const date = (n:number) => new Date(n*1000).toLocaleString('pt-BR');
-const label = (s:string) => ({AWAITING_MANUAL_DECISION:'Aguardando decisão manual',DISCARDED:'Descartado',APPROVAL_PENDING:'Aprovação solicitada',QUEUED:'Na fila',PROCESSING:'Processando',APPROVED:'Aprovado',REJECTED:'Reprovado',FAILED:'Falha',PAUSED_MISSING_ASSETS:'Faltam assets',PAUSED_VALIDATION:'Validação pendente',RETRY:'Nova tentativa',AGUARDANDO_PUBLICACAO_MANUAL:'Publicação manual',PUBLICADO:'Publicado',DONE:'Concluído',RUNNING:'Executando',PAUSED:'Pausado',PIPELINE_ERROR:'Erro de pipeline'}[s] || s);
+const label = (s:string) => ({AWAITING_MANUAL_DECISION:'Aguardando decisão manual',DISCARDED:'Descartado',APPROVAL_PENDING:'Aprovação solicitada',QUEUED:'Na fila',PROCESSING:'Processando',APPROVED:'Aprovado',REJECTED:'Reprovado',FAILED:'Falha',PAUSED_MISSING_ASSETS:'Faltam assets',PAUSED_VALIDATION:'Validação pendente',RETRY:'Nova tentativa',AGUARDANDO_PUBLICACAO_MANUAL:'Publicação manual',PUBLICADO:'Publicado',DONE:'Concluído',RUNNING:'Executando',PAUSED:'Pausado',PIPELINE_ERROR:'Erro de pipeline',PENDING_RIGHTS_REVIEW:'Prévia pronta · direitos pendentes'}[s] || s);
 function Badge({status}:{status:string}) {return <span className={`badge ${['APPROVED','PUBLICADO','DONE'].includes(status)?'good':['FAILED','REJECTED'].includes(status)?'bad':''}`}>{label(status)}</span>}
 function Empty({title,detail,action}:{title:string;detail:string;action?:React.ReactNode}) {return <div className="empty"><Film size={30}/><h3>{title}</h3><p>{detail}</p>{action}</div>}
 
@@ -24,6 +24,7 @@ export default function Home(){
   const [tab,setTab]=useState('Dashboard'); const [data,setData]=useState<State|null>(null);
   const [error,setError]=useState('');const [notice,setNotice]=useState('');const [busy,setBusy]=useState(false);
   const [settings,setSettings]=useState<Row|null>(null); const [selected,setSelected]=useState<Row|null>(null);
+  const [sourceRightsEvidence,setSourceRightsEvidence]=useState('');
   const [preview,setPreview]=useState(''); const [handoffs,setHandoffs]=useState<Row|null>(null);
   const [sceneAssets,setSceneAssets]=useState<Row[]>([]);const [assetFilter,setAssetFilter]=useState('todos');const [assetPermission,setAssetPermission]=useState({source_class:'OWNED_GENERATED',evidence:''});const [uploadKind,setUploadKind]=useState('gameplay');const [uploadFile,setUploadFile]=useState<File|null>(null);const [assetPreview,setAssetPreview]=useState('');const [assetPreviewKind,setAssetPreviewKind]=useState('video');const [personaOptions,setPersonaOptions]=useState<Row>({});const [personaEdit,setPersonaEdit]=useState<Row|null>(null);const [attempts,setAttempts]=useState<Row[]>([]);const [selectedAttempt,setSelectedAttempt]=useState<number|null>(null);const [previewError,setPreviewError]=useState('');const [audioTimeline,setAudioTimeline]=useState<Row|null>(null);const [poseTimeline,setPoseTimeline]=useState<Row[]>([]);
   const [showNotifications,setShowNotifications]=useState(false);const [showShortsZones,setShowShortsZones]=useState(false);
@@ -126,7 +127,25 @@ export default function Home(){
          {selected&&<>
            <h3>{selected.title}</h3>
            <p className="muted">{selected.duration}s · {selected.template} · {selected.rights}</p>
-           <div className="review-actions"><button className="primary" disabled={busy} onClick={()=>act(async()=>{await api('videos/'+selected.id+'/decision',{action:'approve'});const fresh=await refresh();await openVideo(fresh.videos.find((v:Row)=>v.id===selected.id)||selected)},'Decisão de aprovação manual registrada ou agendada.')}>Aprovar manualmente</button>
+           {selected.status==='PENDING_RIGHTS_REVIEW'&&<div className="rights-preview-card" role="region" aria-label="Direitos da prévia concluída">
+             <h3>Prévia concluída — escolha os direitos da fonte</h3>
+             <p>O vídeo foi editado e está disponível para assistir acima. Ele NÃO será colocado em Prontos para postar até você confirmar que tem permissão para usar todos os materiais mostrados na TV. Você pode confirmar a autorização ou descartar a produção.</p>
+             <form onSubmit={e=>{e.preventDefault();act(async()=>{
+               await api('videos/'+selected.id+'/source-rights',{evidence:sourceRightsEvidence.trim()});
+               const fresh=await refresh();await openVideo(fresh.videos.find((v:Row)=>v.id===selected.id)||selected);
+               setSourceRightsEvidence('');
+             },'Direitos registrados. Revise o MP4 e clique em Aprovar manualmente para liberar a postagem.')}}>
+               <label>Comprovação de autorização para as fontes na TV
+                 <textarea rows={3} minLength={15} required value={sourceRightsEvidence}
+                   onChange={e=>setSourceRightsEvidence(e.target.value)}
+                   placeholder="Licença, URL de autorização ou comprovação válida para o conteúdo utilizado"/>
+               </label>
+               <button type="submit" disabled={busy||sourceRightsEvidence.trim().length<15}>
+                 Confirmar direitos para esta prévia
+               </button>
+             </form>
+           </div>}
+           <div className="review-actions"><button className="primary" disabled={busy||selected.status==='PENDING_RIGHTS_REVIEW'} onClick={()=>act(async()=>{await api('videos/'+selected.id+'/decision',{action:'approve'});const fresh=await refresh();await openVideo(fresh.videos.find((v:Row)=>v.id===selected.id)||selected)},'Decisão de aprovação manual registrada ou agendada.')}>Aprovar manualmente</button>
            <button disabled={busy} onClick={()=>{if(window.confirm('Descartar esta produção e interromper novas tentativas?'))act(async()=>{await api('videos/'+selected.id+'/decision',{action:'discard'});const fresh=await refresh();await openVideo(fresh.videos.find((v:Row)=>v.id===selected.id)||selected)},'Produção descartada.')}}>Reprovar / Descartar</button></div>
            {['PAUSED_MISSING_ASSETS','PAUSED_VALIDATION','PIPELINE_ERROR'].includes(selected.status)&&<div role="alert"><p className="error review-prewrap">{selected.error}</p><button disabled={busy} onClick={()=>act(()=>api('videos/'+selected.id+'/resume',{}),'Produção retomada para renderização.')}>Reescanear e retomar</button></div>}
            {selected.manual_decision&&<p className="muted">Decisão: {selected.manual_decision} · Operador: {selected.manual_by||'local'} {selected.manual_at?'· '+date(selected.manual_at):''}</p>}
@@ -153,6 +172,7 @@ export default function Home(){
              <p className="review-prewrap">Asset: {p.asset_id||'fallback gerado'} {p.parent_id?'· pai '+p.parent_id:''}</p>
              <p className="review-prewrap">Origem: {p.source||a.source} · {p.source_class||a.source_class} · {p.category||'sem categoria'}</p>
              {p.path&&<p className="muted review-prewrap">Cópia temporária: {p.path}</p>}
+             {p.tv_slot&&<p className="review-prewrap">TV: {p.tv_slot.tv_source_url||p.tv_slot.tv_source} · Direitos: {p.tv_slot.rights_status||'PENDENTE'} · Cena {p.tv_slot.template}</p>}
              {p.overlay_source&&<p>Imagem/print da fonte: {p.overlay_source}</p>}{p.source_frame_at!=null&&<p>Instante na fonte: {Number(p.source_frame_at).toFixed(1)}s</p>}{p.visual_relevance!=null&&<p>Relevância visual: {Number(p.visual_relevance).toFixed(1)}/10 ({p.visual_relevance_method||'avaliação'}) · {p.visual_reason}</p>}</div>)}</div>)}</div></details>}
            {handoffs&&<details><summary>Briefing e handoffs</summary><pre className="review-prewrap">{JSON.stringify(handoffs,null,2)}</pre></details>}
            {preview&&<div className="actions">{['youtube','tiktok','instagram'].filter(platform=>data.settings.platforms.includes(platform)).map(platform=><button key={platform} onClick={()=>act(()=>downloadMetadata(selected.id,platform),'Metadados baixados.')}>Baixar texto {platform}</button>)}</div>}

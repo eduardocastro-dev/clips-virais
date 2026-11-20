@@ -300,12 +300,13 @@ def local_day_bounds():
 def production_usage(connection=None):
     """One row per real production. Revisions and tests never count twice.
 
-    Active real jobs hold a slot; approvals count on approval day. Rejected,
-    failed and discarded work releases the slot. No legacy kv daily counter.
+    Active jobs and videos awaiting human review retain one daily slot each.
+    Approvals count on approval day; rejected, failed and discarded work
+    releases the slot. Technical retries and tests never double-count.
     """
     begin,end=local_day_bounds()
     statement=text("""SELECT COUNT(*) FROM videos WHERE test=0 AND (
-        (status IN ('QUEUED','PROCESSING','RETRY','PENDING_RIGHTS_REVIEW') AND created>=:start AND created<:end)
+        (status IN ('QUEUED','PROCESSING','RETRY','PENDING_RIGHTS_REVIEW','AWAITING_MANUAL_DECISION') AND created>=:start AND created<:end)
         OR (status='APPROVED' AND COALESCE(approved_at,created)>=:start AND COALESCE(approved_at,created)<:end)
     )""")
     if connection is not None:

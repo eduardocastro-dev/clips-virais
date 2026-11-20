@@ -25,7 +25,7 @@ def grouped_lives():
         all_outputs=mapping.get(parent['id'],[])
         # Discard is an audit tombstone, never a deliverable in Video Studio.
         parent['outputs']=[x for x in all_outputs if x['status']!='DISCARDED']
-        if parent['status']=='DISCARDED' and not parent['outputs']:
+        if parent['status']=='DISCARDED':
             continue
         # Keep progress honest: decisions made still count toward 3 reviewed
         # cuts even if their MP4s are subsequently discarded and removed.
@@ -145,6 +145,7 @@ def decide_output(parent_id:str,output_id:str,body:OutputDecision):
     if child['status']=='APPROVED' and body.decision=='approve':
         return {'status':'APPROVED'}
     if child['status']=='DISCARDED' and body.decision=='discard':
+        _redirect_parent_file(parent_id,child)
         return {'status':'DISCARDED','removed_files':_remove_discarded_media(parent_id,child)}
     if child['status']!='REVIEW_PENDING':
         raise HTTPException(409,'Somente cortes aguardando revisão podem receber decisão.')

@@ -298,3 +298,23 @@ def test_fully_discarded_live_disappears_but_audit_is_preserved(client):
     assert db.rows('SELECT COUNT(*) AS n FROM live_clip_outputs WHERE parent_id=:id',
                    {'id':parent})[0]['n']==3
     assert parent not in [item['id'] for item in client.get('/api/live-clips').json()['items']]
+
+
+def test_hourly_maintenance_purges_old_discarded_cut_without_siblings(client):
+    from backend.api_live_groups import purge_discarded_live_media
+    parent=_parent(status='APPROVED')
+    ids=[_output(parent,i,status='APPROVED') for i in (1,2,3)]
+    discarded=db.rows('SELECT * FROM live_clip_outputs WHERE id=:id',{'id':ids[0]})[0]
+    old_file=db.safe_file(discarded['file_path'])
+    sibling=db.rows('SELECT * FROM live_clip_outputs WHERE id=:id',{'id':ids[1]})[0]
+    db.execute('UPDATE live_clips SET file_path=:path WHERE id=:id',
+               {'path':discarded['file_path'],'id':parent})
+    # Existing versions marked the decision but left old media on disk.
+    db.execute("UPDATE live_clip_outputs SET status='DISCARDED' WHERE id=:id",
+               {'id':ids[0]})
+    assert purge_discarded_live_media()==1
+    assert not old_file.exists()
+    assert db.safe_file(sibling['file_path']).exists()
+    assert db.rows('SELECT file_path FROM live_clips WHERE id=:id',
+                   {'id':parent})[0]['file_path']==sibling['file_path']
+    assert purge_discarded_live_media()==0

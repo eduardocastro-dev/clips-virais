@@ -157,3 +157,115 @@ def test_radar_retains_stream_that_was_uploaded_before_thirty_day_window(monkeyp
     assert vod['ended_at']==end.isoformat()
     assert vod['hype_recency_score']>90
     assert vod['hype_basis']=='freshness_heuristic'
+
+
+def _fallback_metadata(*,end_hours_ago=20,**changes):
+    start=datetime.now(timezone.utc)-timedelta(hours=end_hours_ago+2)
+    result={
+        'id':'AAAA1234xyz','channel_id':CHANNEL,'title':'Live GTA VI encerrada ontem',
+        'availability':'public','live_status':'was_live','is_live':False,
+        'age_limit':0,'duration':7200,'release_timestamp':start.timestamp(),
+        'timestamp':start.timestamp(),'upload_date':start.strftime('%Y%m%d'),
+    }
+    result.update(changes)
+    return result
+
+
+def _api_without_live_fields():
+    raw=_api_video(published=datetime.now(timezone.utc)-timedelta(days=40))
+    return youtube_data._metadata(raw)
+
+
+def test_yt_dlp_fallback_accepts_yesterday_replay_without_api_live_fields(monkeypatch):
+    from backend import public_youtube
+    primary=_api_without_live_fields()
+    assert primary['live_status']=='not_live'
+    assert not py.public_ended_live(primary)
+    calls=[]
+    monkeypatch.setattr(live_cuts,'public_video_info',
+                        lambda url,**kwargs:primary)
+    monkeypatch.setattr(youtube_data,'configured',lambda:True)
+    def extract(url):
+        calls.append(url)
+        return _fallback_metadata()
+    monkeypatch.setattr(public_youtube,'_extract',extract)
+    info=live_cuts._recent_vod_metadata('AAAA1234xyz')
+    assert calls==['https://www.youtube.com/watch?v=AAAA1234xyz']
+    assert info['live_status']=='was_live'
+    assert info['metadata_source']=='youtube_data_api_v3+yt_dlp_public_replay'
+    assert py.public_ended_live(info)
+    assert 0<(datetime.now(timezone.utc)-py.live_ended_at(info)).total_seconds()<86400
+    assert 'actualEndTime' not in info['liveStreamingDetails']
+
+
+@pytest.mark.parametrize('changes', [
+    {'channel_id':'UC'+'B'*22},
+    {'id':'BBBB1234xyz'},
+    {'availability':'unlisted'},
+    {'live_status':'is_live'},
+    {'is_live':True},
+    {'age_limit':18},
+    {'duration':0},
+    {'release_timestamp':(datetime.now(timezone.utc)-timedelta(days=40)).timestamp()},
+])
+def test_ytdlp_fallback_rejects_mismatched_private_active_old_or_incomplete_vod(
+        changes):
+    primary=_api_without_live_fields()
+    alternative=_fallback_metadata(**changes)
+    from backend import public_youtube
+    from unittest.mock import patch
+    with patch.object(public_youtube,'_extract',return_value=alternative):
+        assert live_cuts._yt_dlp_finished_fallback('AAAA1234xyz',primary) is None
+
+
+def test_fallback_cannot_override_api_active_live_or_private_vod():
+    from backend import public_youtube
+    from unittest.mock import patch
+    primary=_api_without_live_fields()
+    calls=[]
+    def extract(url):
+        calls.append(url)
+        return _fallback_metadata()
+    with patch.object(public_youtube,'_extract',side_effect=extract):
+        assert live_cuts._yt_dlp_finished_fallback('AAAA1234xyz',
+                   {**primary,'live_status':'is_live','is_live':True}) is None
+        assert live_cuts._yt_dlp_finished_fallback('AAAA1234xyz',
+                   {**primary,'availability':'private'}) is None
+    assert calls==[]
+
+
+def test_fallback_network_error_does_not_fake_live_end():
+    from backend import public_youtube
+    from backend.integrations import IntegrationError
+    from unittest.mock import patch
+    primary=_api_without_live_fields()
+    with patch.object(public_youtube,'_extract',
+                      side_effect=IntegrationError('YouTube indisponível')):
+        assert live_cuts._yt_dlp_finished_fallback('AAAA1234xyz',primary) is None
+
+
+def test_submit_yesterday_live_using_independent_vod_confirmation(
+        monkeypatch):
+    from backend import daily_quota,public_youtube
+    primary=_api_without_live_fields()
+    monkeypatch.setattr(live_cuts,'public_video_info',
+                        lambda url,**kwargs:primary)
+    monkeypatch.setattr(youtube_data,'configured',lambda:True)
+    monkeypatch.setattr(public_youtube,'_extract',
+                        lambda url:_fallback_metadata())
+    monkeypatch.setattr(daily_quota,'within_deadline',
+                        lambda *args,**kwargs:True)
+    outcome=live_cuts.submit_live_url(
+        'https://www.youtube.com/live/AAAA1234xyz',
+        'Permissão do proprietário para reutilizar e publicar os cortes desta live.')
+    assert outcome['queued'] and outcome['expected_cuts']==3
+    assert db.rows('SELECT status FROM live_clips')[0]['status']=='QUEUED'
+    assert db.rows('SELECT kind FROM jobs WHERE kind LIKE :prefix',
+                   {'prefix':'live_cut:%'})
+
+
+def test_release_timestamp_plus_vod_duration_approximates_end_not_start():
+    start=TODAY-timedelta(days=3)
+    info={'live_status':'was_live','duration':10800,
+          'release_timestamp':start.timestamp()}
+    assert py.live_ended_at(info)==start+timedelta(hours=3)

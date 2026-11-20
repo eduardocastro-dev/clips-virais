@@ -10,6 +10,13 @@ from backend.integrations import IntegrationError
 router=APIRouter(prefix='/api')
 
 
+@router.get('/operations/live')
+def operations_live():
+    """Read-only snapshot for the main dashboard, refreshed by the browser."""
+    from backend.operations_monitor import snapshot
+    return snapshot()
+
+
 @router.get('/daily-quota')
 def quota_state():
     from backend.daily_quota import state

@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 @pytest.fixture(autouse=True)
 def reset():
     db.init_db()
-    for table in ['metrics','publications','video_attempts','jobs','events','videos','notifications','profiles','opportunities','sources','usage','cache','assets','kv']:
+    for table in ['metrics','publications','video_attempts','live_clips','jobs','events','videos','notifications','profiles','opportunities','sources','usage','cache','assets','kv']:
         db.execute(f'DELETE FROM {table}')
     yield
 

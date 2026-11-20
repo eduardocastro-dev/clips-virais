@@ -15,7 +15,26 @@ export function Calendar({publications}:{publications:Row[]}){
   const [offset,setOffset]=useState(0);
   const now=new Date();now.setDate(now.getDate()+offset);
   const days=Array.from({length:7},(_,i)=>{const d=new Date(now);d.setDate(d.getDate()+i);return d});
-  return <div className="calendar"><div className="section-title"><h3>Calendário editorial</h3><div className="actions"><button aria-label="Semana anterior" onClick={()=>setOffset(offset-7)}>←</button><button aria-label="Próxima semana" onClick={()=>setOffset(offset+7)}>→</button></div></div><div className="calendar-days">{days.map(d=>{const items=publications.filter(p=>new Date((p.scheduled_for||p.updated)*1000).toDateString()===d.toDateString());return <div className="calendar-day" key={d.toDateString()}><small>{d.toLocaleDateString('pt-BR',{weekday:'short'})}</small><strong>{d.getDate()}</strong>{items.map(p=><span key={p.id} title={p.title}>{p.platform} · {p.status==='PUBLICADO'?'Publicado':p.status==='AGENDADO'?'Agendado':'Planejado'}</span>)}</div>})}</div><p className="muted">Planejado é a intenção editorial; Agendado exige confirmação do serviço de distribuição.</p></div>
+  return <div className="calendar"><div className="section-title"><h3>Calendário editorial</h3><div className="actions">
+    <button aria-label="Semana anterior" onClick={()=>setOffset(offset-7)}>←</button>
+    <button aria-label="Próxima semana" onClick={()=>setOffset(offset+7)}>→</button>
+  </div></div><div className="calendar-days">{days.map(d=>{
+    const items=publications.filter(p=>new Date((p.scheduled_for||p.updated)*1000).toDateString()===d.toDateString());
+    const grouped=new Map<string,Row[]>();
+    for(const item of items){
+      const key=String(item.title||item.video_id).normalize('NFKC').trim().toLocaleLowerCase('pt-BR');
+      if(!grouped.has(key))grouped.set(key,[]);
+      grouped.get(key)!.push(item);
+    }
+    return <div className="calendar-day" key={d.toDateString()}>
+      <small>{d.toLocaleDateString('pt-BR',{weekday:'short'})}</small>
+      <strong>{d.getDate()}</strong>
+      {[...grouped.entries()].map(([key,group])=><span key={key}
+        title={group[0].title+' — '+group.map(p=>p.platform+': '+p.status).join(', ')}>
+        {group[0].title} · {group.length} {group.length===1?'rede':'redes'}
+      </span>)}
+    </div>;
+  })}</div><p className="muted">Cada título aparece uma vez por dia. Os estados e textos de postagem permanecem individuais por plataforma.</p></div>
 }
 
 export function Schedule({publication,act,api}:{publication:Row;act:(fn:()=>Promise<any>,message:string)=>Promise<void>;api:(path:string,body?:unknown,method?:string)=>Promise<any>}){

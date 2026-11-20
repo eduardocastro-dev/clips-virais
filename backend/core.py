@@ -102,6 +102,9 @@ def init_db():
                           ('manual_at','REAL'),('render_error','TEXT')]:
             if name not in video_cols:
                 c.exec_driver_sql(f'ALTER TABLE videos ADD COLUMN {name} {typ}')
+        clip_cols={r[1] for r in c.exec_driver_sql('PRAGMA table_info(live_clips)')}
+        if 'stage' not in clip_cols:
+            c.exec_driver_sql('ALTER TABLE live_clips ADD COLUMN stage TEXT')
         asset_cols={r[1] for r in c.exec_driver_sql('PRAGMA table_info(assets)')}
         for name,typ in [('category','TEXT'),('tags',"TEXT DEFAULT '[]'"),('active','INTEGER DEFAULT 1'),
                          ('parent_id','TEXT'),('clip_index','INTEGER'),('clip_total','INTEGER'),
@@ -237,7 +240,17 @@ def claim(owner):
     now = time.time()
     with transaction() as c:
         c.execute(text("UPDATE jobs SET status='QUEUED', owner=NULL WHERE status='RUNNING' AND lease<:now"), {'now': now})
-        job = c.execute(text("SELECT * FROM jobs WHERE status='QUEUED' AND due<=:now ORDER BY due LIMIT 1"), {'now': now}).mappings().first()
+        # Operator-submitted live cuts must not wait behind long discovery scans.
+        # Lower-priority radar jobs remain queued; no in-flight job is killed.
+        priority = ("CASE "
+                    "WHEN kind LIKE 'live_cut:%' THEN 0 "
+                    "WHEN kind='pipeline' THEN 1 "
+                    "WHEN kind IN ('radar20_scan','top20_refresh') THEN 9 "
+                    "ELSE 3 END")
+        job = c.execute(text(
+            "SELECT * FROM jobs WHERE status='QUEUED' AND due<=:now "
+            "ORDER BY " + priority + ", due, id LIMIT 1"
+        ), {'now': now}).mappings().first()
         if not job:
             return None
         c.execute(text("UPDATE jobs SET status='RUNNING', attempts=attempts+1, owner=:owner, lease=:lease WHERE id=:id"),

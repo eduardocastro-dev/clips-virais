@@ -203,6 +203,11 @@ def _subtitles(words, start, end, target):
     return len(groups)
 
 
+def _set_stage(clip_id, stage):
+    db.execute("UPDATE live_clips SET stage=:stage,updated=:now WHERE id=:id",
+               {'id':clip_id,'stage':stage,'now':time.time()})
+
+
 def render_clip(clip_id):
     from backend.live_cuts import authorized_channel
     from backend.audio_mix import TARGET_LUFS
@@ -215,19 +220,24 @@ def render_clip(clip_id):
     from backend.daily_quota import config as quota_config,within_deadline
     if not within_deadline(quota_config()):
         raise IntegrationError('Deadline diário atingido antes do início do corte.')
-    verified_live({'id':clip['video_id'],'channel_id':clip['channel_id']})
-    db.execute("UPDATE live_clips SET status='PROCESSING',updated=:now WHERE id=:id",
+    db.execute("UPDATE live_clips SET status='PROCESSING',stage='VERIFYING',updated=:now WHERE id=:id",
                {'now':time.time(),'id':clip_id})
+    verified_live({'id':clip['video_id'],'channel_id':clip['channel_id']})
     folder=db.ROOT/'videos'/'processing'/'live_cuts'/clip_id
     folder.mkdir(parents=True,exist_ok=True)
+    _set_stage(clip_id,'DOWNLOADING_AUDIO')
     audio=_audio_first(clip['source_url'],folder)
+    _set_stage(clip_id,'ANALYZING_AUDIO')
     volume,wav=_volume_levels(audio,folder)
+    _set_stage(clip_id,'TRANSCRIBING')
     transcript=_whisperx_words(wav,folder)
     from backend.daily_quota import config as quota_config
+    _set_stage(clip_id,'SELECTING')
     candidates=_score_candidates(transcript,volume,min_score=quota_config()['min_live_score'])
     if not candidates:
         raise IntegrationError('Sem momento autossuficiente acima do score mínimo configurado; selecionar outra live.')
     choice=candidates[0]
+    _set_stage(clip_id,'DOWNLOADING_EXCERPT')
     source=_get_range(clip['source_url'],choice['start'],choice['end'],folder)
     sub=folder/'live-captions.ass'
     count=_subtitles(transcript['words'],choice['start'],choice['end'],sub)
@@ -250,12 +260,14 @@ def render_clip(clip_id):
         '[0:a]highpass=f=80,acompressor=threshold=0.12:ratio=2.2:attack=12:'
         'release=110,loudnorm=I=-14:TP=-1.5:LRA=9[a]'
     )
+    _set_stage(clip_id,'RENDERING')
     temporary=folder/'render.mp4'
     _run([ff,'-hide_banner','-loglevel','error','-y','-i',str(source),
           '-filter_complex',graph,'-map','[v]','-map','[a]',
           '-c:v','libx264','-preset','veryfast','-crf','22','-r','30',
           '-pix_fmt','yuv420p','-c:a','aac','-b:a','192k',
           '-movflags','+faststart',str(temporary)],timeout=1500)
+    _set_stage(clip_id,'VALIDATING')
     probe=media.probe(temporary)
     stream=next((x for x in probe['streams'] if x['codec_type']=='video'),{})
     if stream.get('codec_name')!='h264' or (stream.get('width'),stream.get('height'))!=(1080,1920):
@@ -291,7 +303,7 @@ def render_clip(clip_id):
               'alignment':'whisperx_forced_alignment','licensed':True,
               'human_review_required':True,'loudness_target_lufs':TARGET_LUFS}
     db.atomic(target/'metadata.json',json.dumps(metadata,ensure_ascii=False,indent=2))
-    db.execute("""UPDATE live_clips SET status='REVIEW_PENDING',score=:score,
+    db.execute("""UPDATE live_clips SET status='REVIEW_PENDING',stage='READY_FOR_REVIEW',score=:score,
         segment_start=:start,segment_end=:end,file_path=:file,updated=:now,error=NULL
         WHERE id=:id""",{'id':clip_id,'score':choice['score'],
                           'start':choice['start'],'end':choice['end'],

@@ -9,6 +9,7 @@ import json
 import math
 import re
 import statistics
+import time
 from datetime import datetime, timedelta, timezone
 from html import unescape
 from html.parser import HTMLParser
@@ -18,6 +19,10 @@ from backend.integrations import request, IntegrationError
 from backend.public_youtube import public_channel_info, public_channel_entries, public_video_info, public_recent_video, public_ended_live, video_published_at
 
 RADAR_WINDOW_DAYS = 30
+# Discovery yields to user-submitted clips and runs in small batches.
+# Never let scanning 20+ remote channels indefinitely monopolize the worker.
+MAX_CHANNELS_PER_SCAN = 3
+MAX_RADAR_RUNTIME_SECONDS = 100
 RANKING_SOURCE = 'https://en.wikipedia.org/wiki/List_of_most-subscribed_YouTube_channels'
 CHANNEL_PATTERN = re.compile(r'^UC[A-Za-z0-9_-]{22}$')
 
@@ -267,26 +272,54 @@ def virality(item, channel_median, now=None):
             'versus_channel_median':round(lift,3),'reason':reason}
 
 
+def _priority_clip_waiting() -> bool:
+    return bool(db.rows(
+        "SELECT id FROM jobs WHERE kind LIKE 'live_cut:%' AND status='QUEUED' "
+        "AND due <= :now LIMIT 1", {'now':time.time()}))
+
+
 def scan_recent(limit=30):
     """No-key channel tab scanning. Missing public metrics remain explicitly unknown."""
-    creators=stored_top_creators().get('channels',[])
+    creators=stored_top_creators().get('channels',[])[:35]
     now=datetime.now(timezone.utc)
+    started=time.monotonic()
     all_videos=[]
     lives=[]
     errors=[]
     seen=set()
-    for channel in creators[:35]:
+    cursor=int(db.get_setting('radar20_cursor',0) or 0)%max(1,len(creators))
+    batch=([creators[(cursor+i)%len(creators)] for i in
+            range(min(MAX_CHANNELS_PER_SCAN,len(creators)))] if creators else [])
+    completed_channels=0
+    stopped_reason=None
+
+    def should_yield():
+        if _priority_clip_waiting():
+            return 'Pesquisa pausada para atender corte de live enviado pelo operador.'
+        if time.monotonic()-started >= MAX_RADAR_RUNTIME_SECONDS:
+            return 'Limite de tempo da pesquisa atingido; retomar na próxima varredura.'
+        return None
+
+    for channel in batch:
+        if (stopped_reason:=should_yield()):
+            break
         cid=str(channel.get('channel_id') or '')
         if not CHANNEL_PATTERN.fullmatch(cid):
             continue
         sampled=[]
         for tab in ('shorts','videos','streams'):
+            if (stopped_reason:=should_yield()):
+                break
             try:
-                sampled.extend(public_channel_entries(cid,tab,limit=8))
+                sampled.extend(public_channel_entries(cid,tab,limit=5))
             except (IntegrationError,ValueError) as exc:
                 errors.append(f"{channel.get('name',cid)} ({tab}): {str(exc)[:120]}")
+        if stopped_reason:
+            break
         eligible=[]
         for entry in sampled:
+            if (stopped_reason:=should_yield()):
+                break
             vid=entry.get('id')
             if not isinstance(vid,str) or not re.fullmatch(r'[A-Za-z0-9_-]{11}',vid):
                 continue
@@ -307,6 +340,8 @@ def scan_recent(limit=30):
             if item.get('channel_id')!=cid:
                 continue
             eligible.append(item)
+        if stopped_reason:
+            break
         counts=[v.get('view_count') for v in eligible
                 if isinstance(v.get('view_count'),int) and v['view_count']>=0]
         median=statistics.median(counts) if counts else None
@@ -357,6 +392,21 @@ def scan_recent(limit=30):
                     {'id':db.uid(),'url':url,'title':info['title'],
                      'metadata':json.dumps(meta,ensure_ascii=False),
                      'score':round(float(info['score'])/10,2),'created':now.timestamp()})
+        completed_channels+=1
+    if creators:
+        db.put_setting('radar20_cursor',(cursor+completed_channels)%len(creators))
+    if stopped_reason:
+        db.put_setting('radar20_scan_status',stopped_reason)
+        # Do not destroy the last successful radar snapshot when a manual live
+        # interrupts the current scan. The next scheduled run resumes via cursor.
+        previous=_load('viral_radar_'+db.today()+'.json',
+                       {'day':db.today(),'status':'PARTIAL','top':[],
+                        'warnings':[stopped_reason]})
+        return {'radar':previous,
+                'recent_lives':_load('recent_lives.json',{'items':[]}).get('items',[]),
+                'paused':stopped_reason}
+    db.put_setting('radar20_scan_status',
+                   f'Pesquisa incremental concluída: {completed_channels} canais nesta execução.')
     all_videos.sort(key=lambda x:(x['score'] is not None,x['score'] or 0),reverse=True)
     lives.sort(key=lambda x:(x['published_at'],x['score'] or 0),reverse=True)
     radar={'day':db.today(),'window_days':RADAR_WINDOW_DAYS,
@@ -364,6 +414,9 @@ def scan_recent(limit=30):
            'examined':len(all_videos),'public_only':True,'clipping_rights_granted':False,
            'discovery_mode':'public_web_no_key',
            'status':'READY' if all_videos else 'PARTIAL',
+           'channels_scanned':completed_channels,
+           'channels_total':len(creators),
+           'incremental':True,
            'warnings':errors[:30] if errors else ([] if creators else ['Nenhum canal configurado.'])}
     _write('viral_radar_'+db.today()+'.json',radar)
     _write('recent_lives.json',{'scanned_at':now.isoformat(),

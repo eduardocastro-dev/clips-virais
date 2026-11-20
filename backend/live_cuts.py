@@ -208,9 +208,9 @@ def enqueue_next():
 
 def mark_failed(clip_id: str, message: str, attempts: int):
     status='FAILED' if attempts>=3 else 'RETRY'
-    db.execute("""UPDATE live_clips SET status=:status, attempts=:attempts,error=:error,updated=:now
-                  WHERE id=:id""",
-               {'id':clip_id,'status':status,'attempts':attempts,
+    db.execute("""UPDATE live_clips SET status=:status,stage=:stage,
+                  attempts=:attempts,error=:error,updated=:now WHERE id=:id""",
+               {'id':clip_id,'status':status,'stage':status,'attempts':attempts,
                 'error':str(message)[:500],'now':time.time()})
     if status=='FAILED':
         record=db.rows('SELECT video_id,channel_id FROM live_clips WHERE id=:id',{'id':clip_id})

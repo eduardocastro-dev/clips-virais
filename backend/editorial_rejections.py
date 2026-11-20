@@ -208,5 +208,12 @@ def forget_video(video_id: str) -> None:
 
 
 def forget_entry(entry_id: str) -> bool:
+    selected=db.rows('SELECT video_id FROM editorial_rejections WHERE id=:id',
+                     {'id':entry_id})
+    if not selected:
+        return False
+    # The discard's two-hour media purge must never silently re-add a veto
+    # that the operator has already explicitly removed.
+    db.put_setting('editorial_unblocked:'+selected[0]['video_id'],True)
     return bool(db.execute('DELETE FROM editorial_rejections WHERE id=:id',
                            {'id':entry_id}))

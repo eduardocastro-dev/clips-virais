@@ -4,7 +4,7 @@ import {useCallback,useEffect,useState} from 'react';
 import {CheckCircle2,Clapperboard,Clock3,Download,Eye,RefreshCw,ShieldCheck,Film} from 'lucide-react';
 
 type Row=Record<string,any>;
-type Props={token:string;embedded?:boolean};
+type Props={token:string;embedded?:boolean;onActivityChange?:(active:{id:string;title:string}|null)=>void};
 const anchors=[
   {value:'bottom_left',label:'Inferior esquerdo (Patife / padrão)'},
   {value:'top_left',label:'Superior esquerdo'},
@@ -52,7 +52,7 @@ async function api(token:string,path:string,body?:unknown,method='GET'){
   }
   return res.json();
 }
-export default function LiveStudioPanel({token,embedded=false}:Props){
+export default function LiveStudioPanel({token,embedded=false,onActivityChange}:Props){
   const [lives,setLives]=useState<Row[]>([]);
   const [busy,setBusy]=useState('');
   const [error,setError]=useState('');
@@ -62,8 +62,13 @@ export default function LiveStudioPanel({token,embedded=false}:Props){
   const [positions,setPositions]=useState<Record<string,string>>({});
   const refresh=useCallback(async()=>{
     const result=await api(token,'live-clips');
-    setLives(result.items||[]);
-  },[token]);
+    const items:Row[]=(result.items||[]).filter((live:Row)=>live.status!=='DISCARDED')
+      .map((live:Row)=>({...live,outputs:(live.outputs||[])
+        .filter((cut:Row)=>cut.status!=='DISCARDED')}));
+    setLives(items);
+    const active=items.find(live=>live.job?.status==='RUNNING');
+    onActivityChange?.(active?{id:active.id,title:active.title}:null);
+  },[token,onActivityChange]);
   useEffect(()=>{
     let alive=true;
     void refresh().catch(e=>{if(alive)setError(e.message)});
@@ -71,6 +76,12 @@ export default function LiveStudioPanel({token,embedded=false}:Props){
     return()=>{alive=false;clearInterval(interval)};
   },[refresh]);
   useEffect(()=>()=>{if(videoUrl)URL.revokeObjectURL(videoUrl)},[videoUrl]);
+  useEffect(()=>{
+    if(selected&&!lives.some(l=>l.outputs?.some((cut:Row)=>cut.id===selected))){
+      setSelected('');
+      setVideoUrl('');
+    }
+  },[selected,lives]);
   async function perform(label:string,fn:()=>Promise<unknown>,success:string){
     setBusy(label);setError('');setNotice('');
     try{await fn();await refresh();setNotice(success)}
@@ -123,7 +134,7 @@ export default function LiveStudioPanel({token,embedded=false}:Props){
         <div className="live-production-header">
           <div className="live-production-info">
             <strong>{live.title}</strong>
-            <small>{humanStatus(live.status)} · {completed}/{expected} cortes concluídos · tentativas {live.attempts||0}/3</small>
+            <small>{humanStatus(live.status)} · {completed}/{expected} cortes avaliados · {outputs.length} visíveis · tentativas {live.attempts||0}/3</small>
             <small><Clock3 size={12}/> {current} · Layout: streamer em cima e gameplay embaixo</small>
             {live.job?.status==='RUNNING'&&<small className="live-active-dot"><span/> Worker executando agora</small>}
           </div>
@@ -167,8 +178,11 @@ export default function LiveStudioPanel({token,embedded=false}:Props){
                 </button>
                 <button disabled={Boolean(busy)} onClick={()=>{
                   if(window.confirm('Descartar somente este corte da live?'))
-                    void perform(cut.id,()=>api(token,'live-clips/'+live.id+'/outputs/'+cut.id+
-                      '/decision',{decision:'discard'},'POST'),'Corte descartado.');
+                    void perform(cut.id,async()=>{
+                      await api(token,'live-clips/'+live.id+'/outputs/'+cut.id+
+                        '/decision',{decision:'discard'},'POST');
+                      if(selected===cut.id){setSelected('');setVideoUrl('')}
+                    },'Corte descartado, arquivos removidos e item retirado da lista.');
                 }}>Descartar</button>
               </>}
             </div>

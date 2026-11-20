@@ -11,30 +11,55 @@ export function Sources({sources,api,act}:{sources:Row[];api:(path:string,body?:
   const [form,setForm]=useState({name:'',url:'',interval_minutes:120,enabled:true});
   return <section className="panel"><h2>Fontes de notícias RSS / Atom</h2><p className="muted">Cadastre feeds verificáveis. Artigos são referências; sua mídia não recebe autorização de reutilização.</p><form className="inline-form" onSubmit={e=>{e.preventDefault();act(()=>api('sources',form),'Fonte salva.')}}><label>Nome da fonte<input required value={form.name} onChange={e=>setForm({...form,name:e.target.value})}/></label><label>URL do feed<input type="url" required value={form.url} onChange={e=>setForm({...form,url:e.target.value})}/></label><label>Intervalo (min)<input type="number" min={15} value={form.interval_minutes} onChange={e=>setForm({...form,interval_minutes:+e.target.value})}/></label><button>Adicionar fonte</button></form>{sources.map(s=><div className="list-row" key={s.id}><div><strong>{s.name}</strong><small>{s.url} · {s.enabled?'Ativa':'Pausada'} · {s.error||'Sem erro registrado'}</small></div><button onClick={()=>act(()=>api('sources/'+s.id+'/scan',{}),'Consulta agendada.')}>Consultar</button><button onClick={()=>act(()=>api('sources',{...s,enabled:!s.enabled}),'Fonte atualizada.')}>{s.enabled?'Pausar':'Ativar'}</button></div>)}</section>
 }
-export function Calendar({publications}:{publications:Row[]}){
+const brazilDay=new Intl.DateTimeFormat('sv-SE',{
+  timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit'
+});
+export function approvalDay(video:Row):string|null{
+  if(!video?.approved||video.status==='DISCARDED'||video.status==='DELETING')return null;
+  // Legacy rows may lack approved_at. Fallback only when no timestamp exists.
+  const timestamp=Number(video.approved_at||video.manual_at||video.updated||0);
+  return timestamp>0?brazilDay.format(new Date(timestamp*1000)):null;
+}
+
+export function Calendar({videos,selectedDay,onSelectDay}:{
+  videos:Row[];selectedDay:string|null;onSelectDay:(day:string|null)=>void
+}){
   const [offset,setOffset]=useState(0);
-  const now=new Date();now.setDate(now.getDate()+offset);
-  const days=Array.from({length:7},(_,i)=>{const d=new Date(now);d.setDate(d.getDate()+i);return d});
-  return <div className="calendar"><div className="section-title"><h3>Calendário editorial</h3><div className="actions">
-    <button aria-label="Semana anterior" onClick={()=>setOffset(offset-7)}>←</button>
-    <button aria-label="Próxima semana" onClick={()=>setOffset(offset+7)}>→</button>
-  </div></div><div className="calendar-days">{days.map(d=>{
-    const items=publications.filter(p=>new Date((p.scheduled_for||p.updated)*1000).toDateString()===d.toDateString());
-    const grouped=new Map<string,Row[]>();
-    for(const item of items){
-      const key=String(item.title||item.video_id).normalize('NFKC').trim().toLocaleLowerCase('pt-BR');
-      if(!grouped.has(key))grouped.set(key,[]);
-      grouped.get(key)!.push(item);
-    }
-    return <div className="calendar-day" key={d.toDateString()}>
-      <small>{d.toLocaleDateString('pt-BR',{weekday:'short'})}</small>
-      <strong>{d.getDate()}</strong>
-      {[...grouped.entries()].map(([key,group])=><span key={key}
-        title={group[0].title+' — '+group.map(p=>p.platform+': '+p.status).join(', ')}>
-        {group[0].title} · {group.length} {group.length===1?'rede':'redes'}
-      </span>)}
-    </div>;
-  })}</div><p className="muted">Cada título aparece uma vez por dia. Os estados e textos de postagem permanecem individuais por plataforma.</p></div>
+  const now=new Date();
+  now.setHours(12,0,0,0);
+  now.setDate(now.getDate()+offset);
+  const days=Array.from({length:7},(_,i)=>{
+    const d=new Date(now);d.setDate(d.getDate()+i);return d
+  });
+  return <div className="calendar">
+    <div className="section-title"><h3>Calendário editorial · data da aprovação</h3>
+      <div className="actions">
+        <button type="button" aria-label="Ver semana anterior" onClick={()=>setOffset(v=>v-7)}>←</button>
+        <button type="button" aria-label="Voltar à semana atual" onClick={()=>setOffset(0)}>Hoje</button>
+        <button type="button" aria-label="Ver próxima semana" onClick={()=>setOffset(v=>v+7)}>→</button>
+      </div>
+    </div>
+    <div className="actions" style={{marginBottom:12}}>
+      <button type="button" className={selectedDay===null?'primary':''}
+        onClick={()=>onSelectDay(null)}>Todas as datas</button>
+      {selectedDay&&<span className="muted">Exibindo aprovados em {selectedDay.split('-').reverse().join('/')}</span>}
+    </div>
+    <div className="calendar-days">{days.map(d=>{
+      const key=brazilDay.format(d);
+      const items=videos.filter(v=>approvalDay(v)===key);
+      const selected=selectedDay===key;
+      return <button type="button" className={'calendar-day'+(selected?' selected':'')}
+          aria-label={'Ver vídeos aprovados em '+d.toLocaleDateString('pt-BR')}
+          aria-pressed={selected} onClick={()=>onSelectDay(selected?null:key)} key={key}>
+        <small>{d.toLocaleDateString('pt-BR',{weekday:'short'})}</small>
+        <strong>{d.getDate()}</strong>
+        <span>{items.length} {items.length===1?'vídeo aprovado':'vídeos aprovados'}</span>
+        {items.slice(0,2).map(v=><span key={v.id} title={v.title}>{v.title}</span>)}
+        {items.length>2&&<span>+{items.length-2} outros</span>}
+      </button>;
+    })}</div>
+    <p className="muted">Clique em um dia para ver somente os vídeos aprovados naquela data. Publicações já confirmadas continuam no histórico.</p>
+  </div>;
 }
 
 export function Schedule({publication,act,api}:{publication:Row;act:(fn:()=>Promise<any>,message:string)=>Promise<void>;api:(path:string,body?:unknown,method?:string)=>Promise<any>}){

@@ -89,10 +89,13 @@ def test_persistent_queue_leases_and_concurrency():
 def test_metadata_cache_and_score(monkeypatch):
     db.set_secret('youtube_api_key', 'fixture-key')
     calls=[]
-    def yt(resource,params):
-        calls.append(resource)
-        return {'items':[{'snippet':{'title':'GTA 6','publishedAt':'2026-11-17T00:00:00Z'},'statistics':{'viewCount':'100','likeCount':'5'},'contentDetails':{},'status':{}}]}
-    monkeypatch.setattr(integrations,'youtube_get',yt)
+    from backend import youtube_data
+    def yt(url):
+        calls.append(url)
+        return {'title':'GTA 6','description':'','uploader':'canal',
+                'view_count':100,'like_count':5,'comment_count':None,
+                'upload_date':'20261117','is_live':False}
+    monkeypatch.setattr(youtube_data,'video_info',yt)
     url='https://www.youtube.com/watch?v=abcdefghijk'
     assert integrations.youtube_metadata(url)['metrics']['viewCount']==100
     integrations.youtube_metadata(url)

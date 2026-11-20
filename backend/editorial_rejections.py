@@ -117,7 +117,7 @@ def _legacy_import() -> None:
         db.execute("""INSERT OR IGNORE INTO editorial_rejections
                    (id,video_id,title,titles_json,source_url,created,expires_at)
                    VALUES (:id,:video,:title,:titles,'',:created,:expires)""",
-                   {'id':'legacy:'+ident,'video':ident,'title':title,
+                   {'id':'manual:'+ident,'video':ident,'title':title,
                     'titles':json.dumps([title],ensure_ascii=False),
                     'created':created,'expires':created+COOLDOWN_SECONDS})
     db.put_setting('editorial_discard_legacy_import_v1',True)

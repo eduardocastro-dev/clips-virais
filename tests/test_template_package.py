@@ -41,7 +41,7 @@ def sample_package():
 
 
 def test_package_install_reads_operator_layout_and_pngs(monkeypatch,tmp_path,client):
-    monkeypatch.setattr(pack,'PACK_DIR',tmp_path/'pack')
+    monkeypatch.setattr(pack,'PACK_DIR',db.DATA/('pack-'+tmp_path.name))
     content=sample_package()
     response=client.post('/api/templates/package',
                          files={'file':('gta_studio_templates.zip',content,'application/zip')})
@@ -55,7 +55,7 @@ def test_package_install_reads_operator_layout_and_pngs(monkeypatch,tmp_path,cli
 
 
 def test_package_rejects_zip_path_traversal(monkeypatch,tmp_path):
-    monkeypatch.setattr(pack,'PACK_DIR',tmp_path/'pack')
+    monkeypatch.setattr(pack,'PACK_DIR',db.DATA/('pack-'+tmp_path.name))
     with zipfile.ZipFile(io.BytesIO(sample_package())):
         pass
     raw=io.BytesIO()
@@ -67,7 +67,7 @@ def test_package_rejects_zip_path_traversal(monkeypatch,tmp_path):
 
 
 def test_render_uses_package_tv_hole_and_has_no_default_credit(monkeypatch,tmp_path):
-    monkeypatch.setattr(pack,'PACK_DIR',tmp_path/'pack')
+    monkeypatch.setattr(pack,'PACK_DIR',db.DATA/('pack-'+tmp_path.name))
     pack.install_zip(sample_package())
     source=db.ROOT/'assets'/'test-news-image.png'
     Image.new('RGB',(640,360),(14,26,50)).save(source)

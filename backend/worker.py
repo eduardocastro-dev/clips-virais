@@ -252,7 +252,7 @@ def perform(job):
         if db.settings().automatic:
             queue_opportunities()
     elif kind == 'metrics_collect':
-        result=collect_metrics()
+        result=collect_metrics(force=True)
         db.log_event(None,'analytics','METRICS_COLLECTED',
                      'Consulta de métricas YouTube: '+json.dumps(result,ensure_ascii=False))
     elif kind == 'maintenance':

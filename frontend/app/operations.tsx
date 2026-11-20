@@ -14,7 +14,7 @@ export function Sources({sources,api,act}:{sources:Row[];api:(path:string,body?:
 const brazilDay=new Intl.DateTimeFormat('sv-SE',{
   timeZone:'America/Sao_Paulo',year:'numeric',month:'2-digit',day:'2-digit'
 });
-export function approvalDay(video:Row):string|null{
+export function approvalDay(video:Row|undefined):string|null{
   if(!video?.approved||video.status==='DISCARDED'||video.status==='DELETING')return null;
   // Legacy rows may lack approved_at. Fallback only when no timestamp exists.
   const timestamp=Number(video.approved_at||video.manual_at||video.updated||0);

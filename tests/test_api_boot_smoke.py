@@ -10,3 +10,6 @@ def test_api_startup_has_health_and_live_clip_routes():
                for path, methods in routes)
     assert sum(path == "/api/live-clips/{id}/file" for path, methods in routes) == 1
     assert sum(path == "/api/live-clips/{id}/metadata" for path, methods in routes) == 1
+    assert any(path == "/api/live-clips/from-url" and "POST" in methods
+               for path, methods in routes)
+

@@ -131,23 +131,21 @@ def scheduler():
         if now - db.get_setting('last_auto_queue', 0) >= 60:
             db.put_setting('last_auto_queue', now)
             queue_opportunities()
-        # Top-20 discovery does not require downloads. YouTube API key is a
-        # prerequisite; missing credentials never stop existing Shorts jobs.
-        if db.secret('youtube_api_key'):
-            if now-db.get_setting('top20_last_attempt',0)>=24*3600:
-                db.enqueue('top20_refresh',unique_key='top20:'+db.today())
-                db.put_setting('top20_last_attempt',now)
-            if now-db.get_setting('radar20_last_attempt',0)>=2*3600:
-                db.enqueue('radar20_scan',unique_key=f'radar20:{int(now//7200)}')
-                db.put_setting('radar20_last_attempt',now)
-            try:
-                from backend.live_cuts import enqueue_next
-                outcome=enqueue_next()
-                db.put_setting('live_clip_scheduler_status',
-                               outcome.get('reason') or
-                               'Corte de live enfileirado para revisão automática.')
-            except Exception as exc:
-                db.log_event(None,'live_cuts','SCHEDULER_ERROR',str(exc)[:400])
+        # Public-only metadata discovery; no YouTube Data API key or OAuth.
+        if now-db.get_setting('top20_last_attempt',0)>=24*3600:
+            db.enqueue('top20_refresh',unique_key='top20:'+db.today())
+            db.put_setting('top20_last_attempt',now)
+        if now-db.get_setting('radar20_last_attempt',0)>=8*3600:
+            db.enqueue('radar20_scan',unique_key=f'radar20:{int(now//28800)}')
+            db.put_setting('radar20_last_attempt',now)
+        try:
+            from backend.live_cuts import enqueue_next
+            outcome=enqueue_next()
+            db.put_setting('live_clip_scheduler_status',
+                           outcome.get('reason') or
+                           'Corte de live enfileirado para revisão automática.')
+        except Exception as exc:
+            db.log_event(None,'live_cuts','SCHEDULER_ERROR',str(exc)[:400])
     last = db.get_setting('last_search', 0)
     if now - last >= config.search_minutes * 60:
         db.enqueue('discover', unique_key=f'discover:{int(now // (config.search_minutes * 60))}')
@@ -209,9 +207,7 @@ def perform(job):
         from backend.viral_radar20 import refresh_creators
         refresh_creators()
     elif kind == 'radar20_scan':
-        from backend.viral_radar20 import scan_recent,stored_top_creators
-        if not stored_top_creators().get('channels'):
-            return
+        from backend.viral_radar20 import scan_recent
         scan_recent()
     elif kind.startswith('split:'):
         from backend.clips import split_asset
@@ -234,10 +230,8 @@ def perform(job):
             queue_opportunities()
     elif kind == 'maintenance':
         cleanup()
-        # Publicação manual não requer API YouTube; métricas só quando a chave
-        # opcional de leitura estiver presente (sem OAuth de postagem).
-        if db.secret('youtube_api_key'):
-            collect_metrics()
+        # Public, best-effort metrics; never requires a YouTube Data API key.
+        collect_metrics()
         daily_report()
         db.notify('daily:' + db.today(), 'Resumo atualizado em reports/' + db.today() + '.md')
     elif kind == 'reconcile':

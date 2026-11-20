@@ -6,7 +6,8 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from backend import core as db
-from backend.integrations import youtube_get, IntegrationError
+from backend.integrations import IntegrationError
+from backend.public_youtube import video_id_from_url, public_video_info, public_ended_live, video_published_at
 from backend.viral_radar20 import RADAR_WINDOW_DAYS, _utc_time, CHANNEL_PATTERN, allowed_public_video
 
 MIN_SCORE = 70
@@ -68,25 +69,63 @@ def record_right(video_id: str, channel_id: str, outcome: str, message: str):
 
 
 def verified_live(entry: dict):
-    """Recheck via official API immediately before any download or processing."""
-    ids=str(entry.get('video_id') or entry.get('id') or '')
-    if not re.fullmatch(r'[A-Za-z0-9_-]{11}',ids):
+    """Confirm rights and the public, ended VOD using anonymous metadata only."""
+    video_id=str(entry.get('video_id') or entry.get('id') or '')
+    if not re.fullmatch(r'[A-Za-z0-9_-]{11}',video_id):
         raise ValueError('ID de live inválido.')
-    videos=youtube_get('videos',{'part':'snippet,status,contentDetails,liveStreamingDetails',
-                                 'id':ids}).get('items',[])
-    if not videos:
-        raise ValueError('VOD público removido ou não encontrado.')
-    video=videos[0]
-    if not allowed_public_video(video):
-        raise ValueError('A live não está pública nos últimos 30 dias ou tem restrições.')
-    ended=_utc_time(video.get('liveStreamingDetails',{}).get('actualEndTime'))
-    if ended is None or ended>datetime.now(timezone.utc):
-        raise ValueError('A live precisa estar encerrada e o VOD público.')
-    if video.get('snippet',{}).get('channelId') != entry['channel_id']:
-        raise ValueError('Canal da live não coincide com a origem.')
-    if not authorized_channel(entry['channel_id']):
-        raise ValueError('Canal fora da clipping_allowlist.json.')
-    return video
+    channel_id=str(entry.get('channel_id') or '')
+    if not authorized_channel(channel_id):
+        raise ValueError('Canal fora da clipping_allowlist.json (autorização obrigatória).')
+    info=public_video_info('https://www.youtube.com/watch?v='+video_id)
+    if info.get('channel_id')!=channel_id:
+        raise ValueError('O canal da live não corresponde à autorização cadastrada.')
+    if not public_ended_live(info,days=RADAR_WINDOW_DAYS):
+        raise ValueError('A URL deve ser um VOD público, encerrado, não restrito, publicado nos últimos 30 dias.')
+    return info
+
+
+def submit_live_url(url: str, evidence: str = '') -> dict:
+    """Operator-selected live; metadata-only preflight before any licensed download."""
+    from backend.daily_quota import config, within_deadline
+    vid=video_id_from_url(url)
+    if not within_deadline(config()):
+        raise ValueError('Horário limite da cota atingido. Envie a live no próximo período.')
+    # WhisperX runs in the worker image (not the API image). The worker
+    # explicitly checks this prerequisite before accepting/rendering a job.
+    # No cookies, account, YouTube Data API key or video download for this lookup.
+    info=public_video_info('https://www.youtube.com/watch?v='+vid)
+    channel_id=str(info.get('channel_id') or '')
+    if not CHANNEL_PATTERN.fullmatch(channel_id):
+        raise ValueError('O canal original não pôde ser identificado pelo link público.')
+    if not authorized_channel(channel_id) and (evidence or '').strip():
+        allow_creator(channel_id,evidence)
+    if not authorized_channel(channel_id):
+        record_right(vid,channel_id,'BLOCKED','Canal sem permissão de corte cadastrada.')
+        raise ValueError('Informe uma autorização válida para reutilizar a live do canal UC '+channel_id+'.')
+    if not public_ended_live(info,days=RADAR_WINDOW_DAYS):
+        record_right(vid,channel_id,'BLOCKED','VOD não confirmado como público, encerrado e recente.')
+        raise ValueError('É necessário um VOD público, encerrado e publicado nos últimos 30 dias.')
+    title=str(info.get('title') or 'Live pública autorizada')[:250]
+    if recently_used(vid,title=title):
+        raise ValueError('Essa live ou tema já foi utilizado nos últimos sete dias.')
+    exists=db.rows('SELECT id,status FROM live_clips WHERE video_id=:id',{'id':vid})
+    if exists:
+        raise ValueError('Esta live já possui um corte registrado no histórico.')
+    permission=authorized_channel(channel_id)
+    ident=db.uid()
+    now=time.time()
+    db.execute("""INSERT INTO live_clips
+       (id,video_id,channel_id,title,source_url,rights_evidence,status,
+        attempts,score,created,updated)
+       VALUES (:id,:video,:channel,:title,:url,:rights,'QUEUED',0,0,:now,:now)""",
+        {'id':ident,'video':vid,'channel':channel_id,'title':title,
+         'url':'https://www.youtube.com/watch?v='+vid,
+         'rights':permission['evidence'],'now':now})
+    record_right(vid,channel_id,'AUTHORIZED',
+                 'Seleção manual: URL pública + VOD encerrado + licença declarada verificados.')
+    db.enqueue('live_cut:'+ident,unique_key='livecut:'+ident)
+    return {'queued':True,'clip_id':ident,'title':title,'channel_id':channel_id,
+            'message':'Live aceita para gerar corte. Publicação sempre manual.'}
 
 
 def _topic_fingerprint(title: str) -> str:

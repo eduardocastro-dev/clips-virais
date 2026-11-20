@@ -47,16 +47,12 @@ def get_top_creators():
 
 @router.post('/viral-radar/top-creators/refresh')
 def trigger_ranking_refresh():
-    if not db.secret('youtube_api_key'):
-        raise HTTPException(409,'Configure YouTube Data API key nas integrações.')
     db.enqueue('top20_refresh',unique_key='top20:manual:'+db.uid())
     return {'queued':True,'message':'Atualização mensal de ranking enviada ao worker.'}
 
 
 @router.post('/viral-radar/scan')
 def trigger_radar_scan():
-    if not db.secret('youtube_api_key'):
-        raise HTTPException(409,'Configure YouTube Data API key nas integrações.')
     db.enqueue('radar20_scan',unique_key='radar20:manual:'+db.uid())
     return {'queued':True,'message':'Pesquisa de conteúdos públicos recentes enviada ao worker.'}
 
@@ -114,6 +110,20 @@ def grant_permission(body: PermissionInput):
 def revoke_permission(channel_id: str):
     from backend.live_cuts import remove_creator
     return remove_creator(channel_id)
+
+
+class ManualLiveInput(BaseModel):
+    url: str = Field(min_length=20,max_length=350)
+    evidence: str = Field(default='',max_length=2000)
+
+
+@router.post('/live-clips/from-url')
+def queue_live_from_url(body: ManualLiveInput):
+    from backend.live_cuts import submit_live_url
+    try:
+        return submit_live_url(body.url,body.evidence)
+    except (ValueError,IntegrationError) as exc:
+        raise HTTPException(422,str(exc)) from None
 
 
 @router.get('/live-clips')

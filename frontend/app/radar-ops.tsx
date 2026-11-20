@@ -23,6 +23,8 @@ export default function RadarOps({token,mode}:Props){
   const [cuts,setCuts]=useState<Row[]>([]);
   const [channelId,setChannelId]=useState('');
   const [rightsEvidence,setRightsEvidence]=useState('');
+  const [manualLiveUrl,setManualLiveUrl]=useState('');
+  const [manualLiveEvidence,setManualLiveEvidence]=useState('');
   const [deadline,setDeadline]=useState('23:59');
   const [minLiveScore,setMinLiveScore]=useState(70);
   const [error,setError]=useState('');
@@ -46,6 +48,17 @@ export default function RadarOps({token,mode}:Props){
     setBusy(true);setError('');setNotice('');
     try{await call(token,path,body,method);await refresh();setNotice(success)}
     catch(e){setError((e as Error).message)}finally{setBusy(false)}
+  }
+  async function submitManualLive(e:React.FormEvent<HTMLFormElement>){
+    e.preventDefault();setBusy(true);setError('');setNotice('');
+    try{
+      const outcome=await call(token,'live-clips/from-url',{
+        url:manualLiveUrl.trim(), evidence:manualLiveEvidence.trim()
+      },'POST');
+      await refresh();
+      setNotice(outcome.message||'Live encaminhada à fila de cortes.');
+      setManualLiveUrl('');setManualLiveEvidence('');
+    }catch(e){setError((e as Error).message)}finally{setBusy(false)}
   }
   async function preview(id:string,download=false){
     setError('');setBusy(true);
@@ -88,8 +101,8 @@ export default function RadarOps({token,mode}:Props){
     {mode==='radar'?<>
       <section className="panel">
         <div className="section-title"><h2>Top criadores do YouTube</h2><button disabled={busy} onClick={()=>act('viral-radar/top-creators/refresh',undefined,'POST','Atualização do ranking enviada ao worker.')}><RefreshCw size={14}/> Atualizar top 20</button></div>
-        <p className="muted">Ranking público atualizado mensalmente, identificado pela API oficial do YouTube. Não é uma lista fixa. Última atualização: {creators.updated_at||'pendente'}. Verificados: {creators.verified_count||0}.</p>
-        {(!creators.channels||!creators.channels.length)&&<p>Nenhum canal verificado. Configure a chave YouTube Data API e clique em Atualizar top 20.</p>}
+        <p className="muted">Ranking público consultado sem credenciais do YouTube. IDs e inscritos só aparecem quando disponíveis publicamente. A lista pode ser parcial. Última atualização: {creators.updated_at||'pendente'}. Identificados pelo ranking: {creators.verified_count||0}.</p>
+        {(!creators.channels||!creators.channels.length)&&<p>Nenhum canal disponível. Adicione um canal UC manualmente ou atualize o ranking público.</p>}
         <div className="radar-creator-grid">{(creators.channels||[]).map((c:Row)=><article key={c.channel_id}>
           <strong>{c.rank?c.rank+'º · ':''}{c.name}</strong><small>{c.country||'País não disponível'} · {c.language||'Idioma não disponível'}</small>
           <small>{typeof c.subscribers==='number'?c.subscribers.toLocaleString('pt-BR')+' inscritos':'Inscritos não disponíveis'}</small>
@@ -101,16 +114,32 @@ export default function RadarOps({token,mode}:Props){
       </section>
       <section className="panel">
         <div className="section-title"><h2>Radar viral · últimos 30 dias</h2><button disabled={busy} onClick={()=>act('viral-radar/scan',undefined,'POST','Nova consulta pública agendada.')}><RefreshCw size={14}/> Pesquisar vídeos e lives</button></div>
-        <p className="muted">O score considera views/hora, curtidas/views, comentários/views e desempenho frente à mediana recente do próprio canal. Dados públicos não concedem licença de reutilização.</p>
+        <p className="muted">O score considera métricas públicas quando disponíveis, sem API key. Métricas não acessíveis aparecem como indisponíveis; acessibilidade não concede licença.</p>
         {(radar.radar?.top||[]).slice(0,25).map((item:Row)=><div className="radar-result" key={item.id}>
           <strong>{item.title}</strong>
-          <small>{item.creator} · {item.score}/100 · publicado {item.published_at?.slice(0,10)}</small>
+          <small>{item.creator} · {item.score??'indisponível'}/100 · publicado {item.published_at?.slice(0,10)}</small>
           <small>{item.reason}</small>
           <a href={item.url} target="_blank" rel="noopener noreferrer">Abrir fonte pública</a>
         </div>)}
-        {!radar.radar?.top?.length&&<p className="muted">Nenhuma análise disponível. Configure a API e execute a pesquisa.</p>}
+        {!radar.radar?.top?.length&&<p className="muted">Nenhuma análise disponível. Atualize o ranking ou adicione canais UC e execute a pesquisa pública.</p>}
       </section>
     </>:<>
+      <section className="panel">
+        <h2>Enviar link de live para corte</h2>
+        <p className="muted">Cole o link de um VOD público já encerrado (últimos 30 dias). O sistema verifica o link sem YouTube Data API e encaminha o corte à revisão; nenhuma postagem é automática. A reutilização exige autorização do titular.</p>
+        <form className="radar-allowlist" onSubmit={submitManualLive}>
+          <label>URL da live encerrada
+            <input type="url" required placeholder="https://www.youtube.com/live/..."
+              value={manualLiveUrl} onChange={e=>setManualLiveUrl(e.target.value)}/>
+          </label>
+          <label>Comprovante de autorização (se ainda não cadastrou o canal)
+            <textarea rows={3} maxLength={2000} value={manualLiveEvidence}
+              onChange={e=>setManualLiveEvidence(e.target.value)}
+              placeholder="Link ou termos de permissão do criador para produzir e publicar cortes"/>
+          </label>
+          <button className="primary" type="submit" disabled={busy||!manualLiveUrl.trim()}>Enviar live para cortes</button>
+        </form>
+      </section>
       <section className="panel">
         <h2>Permissões para cortes de lives</h2>
         <p className="muted">Só é permitido baixar e editar lives de canais incluídos explicitamente na allowlist com evidência de autorização de uso. Um vídeo público não autoriza cortes por si só.</p>
@@ -135,7 +164,7 @@ export default function RadarOps({token,mode}:Props){
       </section>
       <section className="panel">
         <h2>Cortes para revisão humana</h2>
-        {!cuts.length&&<p className="muted">Nenhum corte iniciado. O worker busca apenas lives recentes, encerradas e autorizadas.</p>}
+        {!cuts.length&&<p className="muted">Nenhum corte iniciado. Envie um link acima ou aguarde a busca por lives recentes e autorizadas.</p>}
         {cuts.map((item:Row)=><div className="radar-result" key={item.id}>
           <strong>{item.title}</strong>
           <small>Status {item.status} · nota {item.score??'não avaliado'}/100 · tentativas {item.attempts||0}/3</small>

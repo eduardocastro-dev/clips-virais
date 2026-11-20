@@ -32,30 +32,14 @@ def request(method, url, **kwargs):
 
 
 def youtube_get(resource, params):
-    key = db.secret('youtube_api_key')
-    if not key:
-        raise IntegrationError('Configure YouTube Data API key para pesquisa e metadados.')
-    return request('GET', f'https://www.googleapis.com/youtube/v3/{resource}', params={**params, 'key': key}).json()
+    """Legacy adapter intentionally disabled; public discovery uses yt-dlp."""
+    raise IntegrationError('YouTube Data API não é utilizada pelo GTA Studio. '
+                           'Consulte os metadados públicos disponíveis, sem chave.')
 
 
 def youtube_metadata(url):
-    key = 'metadata:' + url
-    if cached := db.cache_get(key):
-        return cached
-    vid = parse_qs(urlsplit(url).query)['v'][0]
-    if not db.secret('youtube_api_key'):
-        return public_youtube_metadata(url)
-    items = youtube_get('videos', {'part': 'snippet,statistics,contentDetails,status', 'id': vid}).get('items', [])
-    if not items:
-        raise IntegrationError('Vídeo não encontrado ou não acessível pela API.')
-    v = items[0]
-    sn = v['snippet']
-    result = {'title': sn['title'], 'description': sn.get('description', '')[:4000], 'source_profile': sn.get('channelTitle'),
-              'published': sn.get('publishedAt'), 'metrics': {k: int(n) for k, n in v.get('statistics', {}).items()},
-              'duration_iso': v.get('contentDetails', {}).get('duration'), 'license': v.get('status', {}).get('license'),
-              'url': url, 'platform': 'youtube', 'collected_at': time.time()}
-    db.cache_set(key, result)
-    return result
+    """Single anonymous metadata path regardless of any previously saved key."""
+    return public_youtube_metadata(url)
 
 
 def metadata(url, platform):
@@ -428,18 +412,24 @@ def youtube_upload(path, script):
 
 
 def collect_metrics():
-    for pub in db.rows("SELECT * FROM publications WHERE status='PUBLICADO' AND platform='youtube' AND (provider IS NULL OR provider!='postiz')"):
+    """Best-effort public stats; never request a YouTube API key."""
+    for pub in db.rows("SELECT * FROM publications WHERE status='PUBLICADO' AND platform='youtube'"):
         if db.cache_get('metrics:' + pub['id']):
             continue
+        url=pub.get('url') or ''
+        if not url.startswith(('https://www.youtube.com/','https://youtube.com/')):
+            continue
         try:
-            items = youtube_get('videos', {'part': 'statistics', 'id': pub['external_id']}).get('items', [])
-            if not items:
-                continue
-            stats = items[0].get('statistics', {})
-            data = {key: int(stats[remote]) if remote in stats else None for key, remote in
-                    [('views', 'viewCount'), ('likes', 'likeCount'), ('comments', 'commentCount')]}
-            data.update(shares=None, retention=None, ctr=None, average_watch_seconds=None, follower_growth=None)
-            db.execute('INSERT INTO metrics VALUES (:id,:pub,:now,:data)', dict(id=db.uid(), pub=pub['id'], now=time.time(), data=json.dumps(data)))
-            db.cache_set('metrics:' + pub['id'], True, 3600)
+            result=public_youtube_metadata(url)
         except IntegrationError:
-            db.notify('metrics:' + pub['id'] + ':' + db.today(), 'Métricas YouTube indisponíveis; verifique a integração.')
+            continue
+        counts=result.get('metrics',{})
+        if not counts or 'viewCount' not in counts:
+            continue
+        data={'views':counts.get('viewCount'),'likes':counts.get('likeCount'),
+              'comments':counts.get('commentCount'),
+              'shares':None,'retention':None,'ctr':None,
+              'average_watch_seconds':None,'follower_growth':None}
+        db.execute('INSERT INTO metrics VALUES (:id,:pub,:now,:data)',
+                   dict(id=db.uid(),pub=pub['id'],now=time.time(),data=json.dumps(data)))
+        db.cache_set('metrics:' + pub['id'],True,3600)

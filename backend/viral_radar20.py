@@ -1,7 +1,7 @@
 """Monthly public top-channel ranking and strictly public 30-day YouTube radar.
 
 No scraping of authenticated pages, cookies, private videos, or member content.
-The ranking is an *index*; YouTube Data API verifies channel IDs and metrics.
+The ranking is a public index; channel IDs and videos are read anonymously.
 Neither public accessibility nor a Creative Commons tag grants clip permission.
 """
 from __future__ import annotations
@@ -14,7 +14,8 @@ from html import unescape
 from html.parser import HTMLParser
 from urllib.parse import urlsplit
 from backend import core as db
-from backend.integrations import youtube_get, request, IntegrationError
+from backend.integrations import request, IntegrationError
+from backend.public_youtube import public_channel_info, public_channel_entries, public_video_info, public_recent_video, public_ended_live, video_published_at
 
 RADAR_WINDOW_DAYS = 30
 RANKING_SOURCE = 'https://en.wikipedia.org/wiki/List_of_most-subscribed_YouTube_channels'
@@ -131,19 +132,25 @@ def stored_top_creators():
 
 
 def add_creator(channel_id):
+    """Allow operator-selected UC IDs without YouTube Data API credentials."""
     if not CHANNEL_PATTERN.fullmatch(channel_id or ''):
-        raise ValueError('Informe o channel_id do YouTube, começando com UC.')
-    items=youtube_get('channels',{'part':'snippet,statistics','id':channel_id}).get('items',[])
-    if not items:
-        raise ValueError('Channel ID público não encontrado pela API oficial.')
-    creator = items[0]
+        raise ValueError('Informe um channel_id UC válido.')
+    try:
+        item=public_channel_info(channel_id)
+    except IntegrationError:
+        item={'channel_id':channel_id,'name':channel_id,'subscribers':None,
+              'country':None,'language':None,'verified_publicly':False}
     current=db.get_setting('creator_includes',[]) or []
-    current=[item for item in current if item['channel_id']!=channel_id]
-    current.append({'channel_id':channel_id,'name':creator['snippet']['title'],
-                    'subscribers':int(creator.get('statistics',{}).get('subscriberCount') or 0),
-                    'country':creator['snippet'].get('country'),
-                    'language':creator['snippet'].get('defaultLanguage')})
+    current=[x for x in current if x['channel_id']!=channel_id]
+    current.append({**item,'manual':True,'updated_at':datetime.now(timezone.utc).isoformat()})
     db.put_setting('creator_includes',current)
+    catalog=stored_top_creators()
+    catalog['channels']=[c for c in catalog.get('channels',[])
+                         if c.get('channel_id')!=channel_id]
+    catalog['channels'].append({**current[-1],'rank':None})
+    catalog['manual_includes']=sum(bool(c.get('manual')) for c in catalog['channels'])
+    catalog['status']='PARTIAL' if catalog.get('status')!='READY' else 'READY'
+    _write('top_creators.json',catalog)
     return current
 
 
@@ -155,54 +162,59 @@ def exclude_creator(channel_id):
     db.put_setting('creator_excludes',sorted(excluded))
     db.put_setting('creator_includes',[x for x in db.get_setting('creator_includes',[]) or []
                                       if x['channel_id']!=channel_id])
+    catalog=stored_top_creators()
+    catalog['channels']=[c for c in catalog.get('channels',[])
+                         if c.get('channel_id')!=channel_id]
+    _write('top_creators.json',catalog)
     return sorted(excluded)
 
 
 def refresh_creators(force=False):
+    """Best-effort public ranking; never synthesize IDs or subscriber counts."""
     now=datetime.now(timezone.utc)
     old=stored_top_creators()
     updated=_utc_time(old.get('updated_at'))
-    if not force and updated and now-updated < timedelta(days=30) and len(old.get('channels',[])) >= 20:
+    manual=db.get_setting('creator_includes',[]) or []
+    if not force and updated and now-updated < timedelta(days=30) and old.get('status')=='READY':
         return old
-    if not db.secret('youtube_api_key'):
-        raise IntegrationError('Configure YouTube Data API key antes da atualização do top 20.')
-    html=request('GET',RANKING_SOURCE,headers={'User-Agent':'GTAStudioRadar/1.0 (public research)'},timeout=25).text
-    candidates=parse_ranking(html,35)
+    warnings=[]
+    try:
+        html=request('GET',RANKING_SOURCE,
+                     headers={'User-Agent':'Mozilla/5.0 GTAStudioPublicRadar/1.0'},
+                     timeout=25).text
+        candidates=parse_ranking(html,40)
+    except (IntegrationError, ValueError) as exc:
+        candidates=[]
+        warnings.append('Ranking público indisponível: '+str(exc))
     excluded=set(db.get_setting('creator_excludes',[]) or [])
     channels=[]
     for candidate in candidates:
         if len(channels)>=20:
             break
-        channel_id=candidate.get('channel_id')
-        if not channel_id:
-            results=youtube_get('search',{'part':'snippet','type':'channel','maxResults':3,
-                                          'q':candidate['name']}).get('items',[])
-            match=next((item for item in results
-                        if item.get('snippet',{}).get('channelTitle','').casefold()==candidate['name'].casefold()),None)
-            if not match:
-                continue
-            channel_id=match.get('id',{}).get('channelId','')
-        if not CHANNEL_PATTERN.fullmatch(channel_id) or channel_id in excluded:
+        cid=candidate.get('channel_id')
+        if not CHANNEL_PATTERN.fullmatch(cid or '') or cid in excluded:
+            # A ranking name without its real channel ID cannot be guessed.
             continue
-        profiles=youtube_get('channels',{'part':'snippet,statistics','id':channel_id}).get('items',[])
-        if not profiles:
+        try:
+            verified=public_channel_info(cid)
+        except (IntegrationError,ValueError):
             continue
-        item=profiles[0]
-        info=item['snippet'];counts=item.get('statistics',{})
-        if not counts.get('subscriberCount'):
+        if not verified['verified_publicly']:
             continue
-        channels.append({'rank':candidate['rank'],'name':info['title'],
-                         'channel_id':item['id'],'subscribers':int(counts['subscriberCount']),
-                         'country':info.get('country'),'language':info.get('defaultLanguage'),
+        channels.append({**verified,'rank':candidate['rank'],'manual':False,
                          'updated_at':now.isoformat(),'source':RANKING_SOURCE})
-    for extra in db.get_setting('creator_includes',[]) or []:
+    for extra in manual:
         if extra['channel_id'] not in {c['channel_id'] for c in channels} and extra['channel_id'] not in excluded:
             channels.append({**extra,'rank':None,'manual':True,'updated_at':now.isoformat()})
+    verified_count=sum(not c.get('manual') for c in channels)
+    if verified_count<20:
+        warnings.append('A fonte pública não disponibilizou 20 IDs UC verificáveis; lista parcial.')
     data={'updated_at':now.isoformat(),'ranking_source':RANKING_SOURCE,
-          'status':'READY' if len([x for x in channels if not x.get('manual')])==20 else 'PARTIAL',
-          'channels':channels,'verified_count':len([x for x in channels if not x.get('manual')]),
-          'manual_includes':len([x for x in channels if x.get('manual')]),
-          'warning':None if len(channels)>=20 else 'Menos de 20 canais verificados; verificar API/ranking.'}
+          'status':'READY' if verified_count>=20 else 'PARTIAL',
+          'channels':channels,'verified_count':verified_count,
+          'manual_includes':sum(c.get('manual',False) for c in channels),
+          'warning':' '.join(warnings) or None,
+          'discovery_mode':'public_web_no_key'}
     _write('top_creators.json',data)
     return data
 
@@ -256,77 +268,112 @@ def virality(item, channel_median, now=None):
 
 
 def scan_recent(limit=30):
-    if not db.secret('youtube_api_key'):
-        raise IntegrationError('YouTube Data API key necessária para o radar de 30 dias.')
-    creators=stored_top_creators()['channels']
-    if not creators:
-        raise IntegrationError('Top de canais vazio: execute atualizar top 20 antes do radar.')
+    """No-key channel tab scanning. Missing public metrics remain explicitly unknown."""
+    creators=stored_top_creators().get('channels',[])
     now=datetime.now(timezone.utc)
     all_videos=[]
     lives=[]
+    errors=[]
+    seen=set()
     for channel in creators[:35]:
-        cid=channel['channel_id']
-        details=youtube_get('channels',{'part':'contentDetails','id':cid}).get('items',[])
-        if not details:
+        cid=str(channel.get('channel_id') or '')
+        if not CHANNEL_PATTERN.fullmatch(cid):
             continue
-        upload=details[0].get('contentDetails',{}).get('relatedPlaylists',{}).get('uploads')
-        if not upload:
-            continue
-        recent=youtube_get('playlistItems',{'part':'contentDetails','playlistId':upload,
-                                           'maxResults':40}).get('items',[])
-        ids=[item.get('contentDetails',{}).get('videoId') for item in recent]
-        ids=[v for v in ids if isinstance(v,str) and re.fullmatch(r'[A-Za-z0-9_-]{11}',v)]
-        if not ids:
-            continue
-        found=youtube_get('videos',{'part':'snippet,status,contentDetails,statistics,liveStreamingDetails',
-                                   'id':','.join(ids)}).get('items',[])
-        eligible=[x for x in found if allowed_public_video(x,now) and
-                  x.get('snippet',{}).get('channelId')==cid]
-        all_counts=[int(x.get('statistics',{}).get('viewCount') or 0) for x in eligible]
-        median=statistics.median(all_counts) if all_counts else 1
+        sampled=[]
+        for tab in ('shorts','videos','streams'):
+            try:
+                sampled.extend(public_channel_entries(cid,tab,limit=8))
+            except (IntegrationError,ValueError) as exc:
+                errors.append(f"{channel.get('name',cid)} ({tab}): {str(exc)[:120]}")
+        eligible=[]
+        for entry in sampled:
+            vid=entry.get('id')
+            if not isinstance(vid,str) or not re.fullmatch(r'[A-Za-z0-9_-]{11}',vid):
+                continue
+            if vid in seen:
+                continue
+            seen.add(vid)
+            # A gaming-news radar should not inject unrelated global-channel topics.
+            if not re.search(r'(?i)\b(?:gta\s*(?:6|vi|5|v)|grand theft auto|rockstar)\b',
+                             str(entry.get('title') or '')):
+                continue
+            try:
+                item=public_video_info('https://www.youtube.com/watch?v='+vid)
+            except (IntegrationError,ValueError) as exc:
+                errors.append(f"{vid}: {str(exc)[:120]}")
+                continue
+            if not public_recent_video(item,days=RADAR_WINDOW_DAYS,now=now):
+                continue
+            if item.get('channel_id')!=cid:
+                continue
+            eligible.append(item)
+        counts=[v.get('view_count') for v in eligible
+                if isinstance(v.get('view_count'),int) and v['view_count']>=0]
+        median=statistics.median(counts) if counts else None
         for item in eligible:
-            stats=item.get('statistics',{})
-            measured=virality(item,median,now)
-            info={'id':item['id'],'url':'https://www.youtube.com/watch?v='+item['id'],
-                  'channel_id':cid,'creator':channel['name'],
-                  'title':item['snippet']['title'],
-                  'published_at':item['snippet']['publishedAt'],
-                  'duration_seconds':_seconds(item.get('contentDetails',{}).get('duration','')),
-                  'metrics':{k:int(v) for k,v in stats.items() if k in ('viewCount','likeCount','commentCount')},
-                  **measured,'rights':'REFERENCE_ONLY'}
+            vid=item['id']
+            date=video_published_at(item)
+            if not date:
+                continue
+            views=item.get('view_count')
+            likes=item.get('like_count')
+            comments=item.get('comment_count')
+            has_views=isinstance(views,int) and views>=0
+            complete_metrics=(has_views and isinstance(likes,int) and
+                              isinstance(comments,int))
+            if complete_metrics:
+                api_shaped={'snippet':{'publishedAt':date.isoformat()},
+                            'statistics':{'viewCount':views}}
+                if isinstance(likes,int):api_shaped['statistics']['likeCount']=likes
+                if isinstance(comments,int):api_shaped['statistics']['commentCount']=comments
+                evaluated=virality(api_shaped,median or 1,now=now)
+            else:
+                evaluated={'score':None,'views_per_hour':None,'likes_per_view':None,
+                           'comments_per_view':None,'versus_channel_median':None,
+                           'reason':'Visualizações ou interações públicas incompletas; pontuação não atribuída.'}
+            url='https://www.youtube.com/watch?v='+vid
+            info={'id':vid,'url':url,'channel_id':cid,
+                  'creator':channel.get('name',cid),'title':item.get('title') or vid,
+                  'published_at':date.isoformat(),
+                  'duration_seconds':item.get('duration'),
+                  'metrics':{'viewCount':views if has_views else None,
+                             'likeCount':likes if isinstance(likes,int) else None,
+                             'commentCount':comments if isinstance(comments,int) else None},
+                  **evaluated,'rights':'REFERENCE_ONLY',
+                  'discovery':'public_web_no_key'}
             all_videos.append(info)
-            ended=item.get('liveStreamingDetails',{}).get('actualEndTime')
-            if ended and _utc_time(ended) and _utc_time(ended)<=now and info['duration_seconds']:
-                lives.append({**info,'ended_at':ended,'ended':True})
-    # Only GTA-related public sources feed the existing Shorts pipeline as
-    # reference metadata. Discovery NEVER authorizes footage reuse.
-    for candidate in all_videos:
-        if not re.search(r'(?i)\b(?:gta\s*(?:6|vi)|grand theft auto|rockstar games)\b',
-                         candidate['title']):
-            continue
-        meta={'url':candidate['url'],'platform':'youtube','title':candidate['title'],
-              'published':candidate['published_at'],'metrics':candidate['metrics'],
-              'source_profile':candidate['creator'],'channel_id':candidate['channel_id'],
-              'rights':'REFERENCE_ONLY','discovery':'top20_official_api',
-              'collected_at':now.timestamp()}
-        db.execute("""INSERT INTO opportunities(id,url,platform,title,metadata,score,created,profile_id)
-            VALUES (:id,:url,'youtube',:title,:metadata,:score,:created,NULL)
-            ON CONFLICT(url) DO UPDATE SET metadata=excluded.metadata,score=excluded.score,
-             title=excluded.title""",
-            {'id':db.uid(),'url':candidate['url'],'title':candidate['title'],
-             'metadata':json.dumps(meta,ensure_ascii=False),
-             'score':round(candidate['score']/10,2),'created':now.timestamp()})
-    all_videos.sort(key=lambda v:v['score'],reverse=True)
-    lives.sort(key=lambda v:(v['published_at'],v['score']),reverse=True)
-    radar={'day':db.today(),'window_days':RADAR_WINDOW_DAYS,'scanned_at':now.isoformat(),
-           'top':all_videos[:max(1,min(100,int(limit)))],
-           'examined':len(all_videos),'public_only':True,
-           'clipping_rights_granted':False}
+            if public_ended_live(item,days=RADAR_WINDOW_DAYS,now=now):
+                lives.append({**info,'ended_at':date.isoformat(),'ended':True})
+            if info['score'] is not None:
+                meta={'url':url,'platform':'youtube','title':info['title'],
+                      'published':date.isoformat(),'metrics':info['metrics'],
+                      'source_profile':info['creator'],'channel_id':cid,
+                      'rights':'REFERENCE_ONLY','discovery':'public_web_no_key',
+                      'collected_at':now.timestamp()}
+                db.execute("""INSERT INTO opportunities(id,url,platform,title,metadata,score,created,profile_id)
+                    VALUES (:id,:url,'youtube',:title,:metadata,:score,:created,NULL)
+                    ON CONFLICT(url) DO UPDATE SET metadata=excluded.metadata,score=excluded.score,
+                    title=excluded.title""",
+                    {'id':db.uid(),'url':url,'title':info['title'],
+                     'metadata':json.dumps(meta,ensure_ascii=False),
+                     'score':round(float(info['score'])/10,2),'created':now.timestamp()})
+    all_videos.sort(key=lambda x:(x['score'] is not None,x['score'] or 0),reverse=True)
+    lives.sort(key=lambda x:(x['published_at'],x['score'] or 0),reverse=True)
+    radar={'day':db.today(),'window_days':RADAR_WINDOW_DAYS,
+           'scanned_at':now.isoformat(),'top':all_videos[:max(1,min(100,int(limit)))],
+           'examined':len(all_videos),'public_only':True,'clipping_rights_granted':False,
+           'discovery_mode':'public_web_no_key',
+           'status':'READY' if all_videos else 'PARTIAL',
+           'warnings':errors[:30] if errors else ([] if creators else ['Nenhum canal configurado.'])}
     _write('viral_radar_'+db.today()+'.json',radar)
-    _write('recent_lives.json',{'scanned_at':now.isoformat(),'window_days':RADAR_WINDOW_DAYS,'items':lives})
-    md=['# Viral Radar — '+db.today(),'','Janela: últimos 30 dias; API YouTube pública. '
-        'Metadados não autorizam reaproveitamento de vídeo.','']
-    md.extend(f"- **{i['creator']}** — {i['title']} — score {i['score']} — {i['url']} — {i['reason']}"
-              for i in radar['top'])
+    _write('recent_lives.json',{'scanned_at':now.isoformat(),
+                                'window_days':RADAR_WINDOW_DAYS,'items':lives})
+    md=['# Viral Radar — '+db.today(),'','Fonte: metadados públicos sem YouTube Data API. '
+        'Acessibilidade pública não concede licença de reutilização.','']
+    md.extend(f"- **{x['creator']}** — {x['title']} — score "
+              f"{x['score'] if x['score'] is not None else 'indisponível'}"
+              f" — {x['url']} — {x['reason']}" for x in radar['top'])
+    if errors:
+        md.extend(['','## Fontes temporariamente indisponíveis',*('- '+x for x in errors[:20])])
     db.atomic(db.ROOT/'reports'/('viral_radar_'+db.today()+'.md'),'\n'.join(md)+'\n')
     return {'radar':radar,'recent_lives':lives}

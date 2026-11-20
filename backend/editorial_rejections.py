@@ -106,6 +106,8 @@ def _legacy_import() -> None:
         ident=str(item.get('id') or '')
         if not re.fullmatch(r'[a-f0-9]{32}',ident):
             continue
+        if db.get_setting('editorial_unblocked:'+ident,False):
+            continue
         try:
             created=float(item.get('discarded_at') or item.get('deleted_at') or now)
         except (ValueError,TypeError):

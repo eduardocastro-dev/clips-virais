@@ -146,3 +146,17 @@ def test_generic_gta_6_does_not_block_unrelated_topics():
     assert er.topic_tokens('GTA 6')==frozenset()
     assert not er.same_topic('GTA 6', 'GTA 6: Lucia no trailer')
     assert not er.same_topic('GTA 6: mapa detalhado', 'GTA 6: gráficos realistas')
+
+
+def test_unblocked_topic_stays_allowed_after_discard_media_purge(client):
+    ident=_video('d'*32)
+    assert client.post('/api/videos/'+ident+'/decision',
+                       json={'action':'discard'}).status_code==200
+    entry=client.get('/api/editorial/rejections').json()['items'][0]['id']
+    assert client.delete('/api/editorial/rejections/'+entry).status_code==200
+    db.execute('UPDATE videos SET discarded_at=:past WHERE id=:id',
+               {'past':time.time()-7300,'id':ident})
+    assert deletion.purge_due()['deleted']==1
+    assert er.active()==[]
+    assert er.blocked('https://www.youtube.com/shorts/abcdefghijk',
+                      'GTA VI detalhes de Vice City mapa') is None

@@ -91,7 +91,7 @@ def create_video(req: ImportRequest | None = None, test=False, reference=None, v
         # retries, failed/rejected work and tests do not consume extra slots.
         # Civil-day boundaries follow the configured São Paulo time zone.
         if not test and db.production_usage(c) >= config.daily_limit:
-            raise ValueError('Limite diário de produção atingido (produções ativas + aprovadas hoje).')
+            raise ValueError('Limite diário de produção atingido (inclui Shorts aguardando aprovação manual).')
         c.execute(text('''INSERT INTO videos(id,run_id,url,platform,title,rights,evidence,credits,instructions,template,duration,status,stage,test,created,updated)
             VALUES (:id,:run,:url,:platform,:title,:rights,:evidence,:credits,:instructions,:template,:duration,'QUEUED','diretor',:test,:now,:now)'''), params)
         if manual_script:

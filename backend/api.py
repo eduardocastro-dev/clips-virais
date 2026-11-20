@@ -78,8 +78,12 @@ def state():
     from backend.assets import sync_library
     sync_library()
     videos = db.rows('SELECT * FROM videos ORDER BY created DESC LIMIT 100')
+    approved_videos = db.rows("""SELECT * FROM videos WHERE approved=1
+                                 AND status NOT IN ('DISCARDED','DELETING')
+                                 ORDER BY COALESCE(approved_at,manual_at,updated) DESC LIMIT 1000""")
     return {'settings': db.settings().model_dump(), 'videos': videos,
-        'publications': db.rows('SELECT p.*,v.title,v.test,v.template FROM publications p JOIN videos v ON p.video_id=v.id ORDER BY p.updated DESC LIMIT 200'),
+        'approved_videos': approved_videos,
+        'publications': db.rows('SELECT p.*,v.title,v.test,v.template FROM publications p JOIN videos v ON p.video_id=v.id ORDER BY p.updated DESC LIMIT 1000'),
         'profiles': db.rows('SELECT * FROM profiles ORDER BY priority DESC'),
         'sources': db.rows('SELECT * FROM sources ORDER BY name'),
         'opportunities': db.rows("""SELECT * FROM opportunities ORDER BY
@@ -90,6 +94,8 @@ def state():
         'events': db.rows('SELECT * FROM events ORDER BY created DESC LIMIT 100'),
         'jobs': db.rows('SELECT * FROM jobs ORDER BY due DESC LIMIT 100'),
         'metrics': db.rows('SELECT m.*,p.platform,v.template FROM metrics m JOIN publications p ON p.id=m.publication_id JOIN videos v ON v.id=p.video_id ORDER BY observed DESC LIMIT 500'),
+        'metric_checks': {row['key'].removeprefix('metrics_check:'): json.loads(row['value'])
+             for row in db.rows("SELECT key,value FROM kv WHERE key LIKE 'metrics_check:%'")},
         'usage': db.rows('SELECT * FROM usage ORDER BY day DESC LIMIT 30'),
         'assets': db.rows('SELECT * FROM assets ORDER BY created DESC LIMIT 1000'),
         'persona': __import__('backend.personas',fromlist=['get_persona']).get_persona(),
@@ -418,7 +424,16 @@ def confirm(id: str, item: Confirm):
     db.execute("UPDATE publications SET status='PUBLICADO',url=:url,external_id=:external,updated=:now WHERE id=:id",
                dict(id=id, url=url, external=external, now=time.time()))
     db.notify('published:' + id, 'Publicação confirmada manualmente: ' + url)
+    if platform=='youtube':
+        db.enqueue('metrics_collect',unique_key='metrics:confirmed:'+id)
     return {'status': 'PUBLICADO'}
+
+
+@app.post('/api/analytics/refresh', dependencies=protected)
+def refresh_analytics():
+    """Queue a fresh best-effort observation, without inventing engagement."""
+    job=db.enqueue('metrics_collect',unique_key='metrics:manual:'+db.uid())
+    return {'queued':True,'job_id':job}
 
 
 @app.post('/api/jobs/{id}/{action}', dependencies=protected)

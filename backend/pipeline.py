@@ -388,6 +388,10 @@ def run_pipeline(video_id):
     video = db.rows('SELECT * FROM videos WHERE id=:id', {'id': video_id})[0]
     if video['manual_decision'] in ('discard','approved'):
         return
+    # A stale/reclaimed job must never restart an item parked for operator review.
+    # Its decision is independent of the remaining production queue.
+    if video['status'] in ('AWAITING_MANUAL_DECISION','PENDING_RIGHTS_REVIEW'):
+        return
     if video['approved']:
         distribute(video_id)
         return

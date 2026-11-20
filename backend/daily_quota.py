@@ -108,15 +108,31 @@ def state() -> dict:
             rejected_shorts.append(video['id'])
             failures.append({'kind':'short','id':video['id'],'reason':video['error'] or video['status']})
     approved_clips, active_clips, rejected_clips = [], [], []
+    # A single live has 3 independent deliverables, not a single quota slot.
+    # Each completed output is counted exactly once; unfinished expected
+    # outputs reserve quota while that live is processing.
     for clip in clips:
         attempts['live_cut:'+clip['id']] = int(clip['attempts'] or 0)
-        if clip['status'] in CLIP_FINISHED and clip['file_path'] and (db.ROOT/clip['file_path']).is_file():
-            approved_clips.append(clip['id'])
-        elif clip['status'] in CLIP_ACTIVE:
-            active_clips.append(clip['id'])
+        children=db.rows(
+            "SELECT id,status,file_path,ordinal FROM live_clip_outputs WHERE parent_id=:parent",
+            {'parent':clip['id']})
+        for child in children:
+            if (child['status'] in CLIP_FINISHED and child['file_path'] and
+                (db.ROOT/child['file_path']).is_file()):
+                approved_clips.append(child['id'])
+            elif child['status'] in CLIP_FAILED:
+                rejected_clips.append(child['id'])
+        # Old one-cut rows migrated to a child keep their single valid output.
+        expected=max(3,int(clip.get('cut_target') or 3))
+        ready_count=sum(x['status'] in CLIP_FINISHED or x['status']=='DISCARDED'
+                        for x in children)
+        if clip['status'] in CLIP_ACTIVE:
+            active_clips.extend(clip['id']+':'+str(i) for i in range(
+                max(0,expected-ready_count)))
         elif clip['status'] in CLIP_FAILED:
             rejected_clips.append(clip['id'])
-            failures.append({'kind':'live_cut','id':clip['id'],'reason':clip['error'] or clip['status']})
+            failures.append({'kind':'live_cut','id':clip['id'],
+                             'reason':clip['error'] or clip['status']})
     missing = {'shorts':max(0,conf['shorts']-len(approved_shorts)),
                'lives_cuts':max(0,conf['lives_cuts']-len(approved_clips))}
     complete = not any(missing.values())
@@ -165,14 +181,17 @@ def report(snapshot=None) -> str:
         lines.append('- Nenhuma reprovação registrada no dia.')
     lines += ['','## Links locais dos cortes e Shorts']
     for clip_id in snapshot['approved_ids']['lives_cuts']:
-        lines.append('- Corte '+clip_id+': /api/live-clips/'+clip_id+'/file')
+        lookup=db.rows("SELECT parent_id FROM live_clip_outputs WHERE id=:id",{'id':clip_id})
+        if lookup:
+            lines.append('- Corte '+clip_id+': /api/live-clips/'+lookup[0]['parent_id']+
+                         '/outputs/'+clip_id+'/file')
     for short_id in snapshot['approved_ids']['shorts']:
         lines.append('- Short '+short_id+': /api/files/'+short_id)
     lines += ['','## Pendências e ações para o operador']
     if missing['shorts']:
         lines.append('- Faltam '+str(missing['shorts'])+' Shorts. Verificar radar público recente, direitos, fontes válidas e jobs técnicos.')
     if missing['lives_cuts']:
-        lines.append('- Faltam '+str(missing['lives_cuts'])+' cortes de lives. '+snapshot.get('live_clip_scheduler_status','')+' Verificar autorização, YouTube API, WhisperX e VODs encerrados dos últimos 30 dias.')
+        lines.append('- Faltam '+str(missing['lives_cuts'])+' cortes de lives. '+snapshot.get('live_clip_scheduler_status','')+' Verificar autorização, disponibilidade pública, WhisperX e VODs encerrados dos últimos 30 dias.')
     if not any(missing.values()):
         lines.append('- Cota alcançada; revisar e publicar manualmente.')
     text='\n'.join(lines)+'\n'

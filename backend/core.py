@@ -69,6 +69,16 @@ def init_db():
             segment_start REAL, segment_end REAL, file_path TEXT, error TEXT,
             created REAL NOT NULL, updated REAL NOT NULL)''',
         'CREATE INDEX IF NOT EXISTS idx_live_clips_status_created ON live_clips(status,created)',
+        """CREATE TABLE IF NOT EXISTS live_clip_outputs (
+            id TEXT PRIMARY KEY, parent_id TEXT NOT NULL,
+            ordinal INTEGER NOT NULL, title TEXT,
+            status TEXT NOT NULL, score REAL, segment_start REAL,
+            segment_end REAL, file_path TEXT, metadata_path TEXT,
+            cover_path TEXT, reason TEXT, error TEXT,
+            created REAL NOT NULL, updated REAL NOT NULL,
+            UNIQUE(parent_id,ordinal),
+            FOREIGN KEY(parent_id) REFERENCES live_clips(id))""",
+        'CREATE INDEX IF NOT EXISTS idx_live_clip_outputs_parent ON live_clip_outputs(parent_id,ordinal)',
         '''CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, video_id TEXT, agent TEXT,
         status TEXT, summary TEXT, tokens INTEGER DEFAULT 0, created REAL)''',
         'CREATE TABLE IF NOT EXISTS cache (key TEXT PRIMARY KEY, value TEXT, expires REAL)',
@@ -105,6 +115,18 @@ def init_db():
         clip_cols={r[1] for r in c.exec_driver_sql('PRAGMA table_info(live_clips)')}
         if 'stage' not in clip_cols:
             c.exec_driver_sql('ALTER TABLE live_clips ADD COLUMN stage TEXT')
+        if 'webcam_anchor' not in clip_cols:
+            c.exec_driver_sql("ALTER TABLE live_clips ADD COLUMN webcam_anchor TEXT DEFAULT 'bottom_left'")
+        if 'cut_target' not in clip_cols:
+            c.exec_driver_sql("ALTER TABLE live_clips ADD COLUMN cut_target INTEGER DEFAULT 3")
+        # Preserve old one-cut deliveries as a visible legacy child; never
+        # rewrite, delete or count existing clips more than once.
+        c.exec_driver_sql("""INSERT OR IGNORE INTO live_clip_outputs
+          (id,parent_id,ordinal,title,status,score,segment_start,segment_end,
+           file_path,created,updated)
+          SELECT 'legacy-' || id,id,1,title,status,score,segment_start,
+                 segment_end,file_path,created,updated
+          FROM live_clips WHERE file_path IS NOT NULL AND file_path!=''""")
         asset_cols={r[1] for r in c.exec_driver_sql('PRAGMA table_info(assets)')}
         for name,typ in [('category','TEXT'),('tags',"TEXT DEFAULT '[]'"),('active','INTEGER DEFAULT 1'),
                          ('parent_id','TEXT'),('clip_index','INTEGER'),('clip_total','INTEGER'),

@@ -84,8 +84,10 @@ def verified_live(entry: dict):
     return info
 
 
-def submit_live_url(url: str, evidence: str = '') -> dict:
-    """Operator-selected live; metadata-only preflight before any licensed download."""
+def submit_live_url(url: str, evidence: str = '', webcam_anchor: str='bottom_left') -> dict:
+    """Operator-selected VOD: one queued job producing three distinct cuts."""
+    from backend.live_clip_layout import validate_anchor
+    webcam_anchor=validate_anchor(webcam_anchor)
     from backend.daily_quota import config, within_deadline
     vid=video_id_from_url(url)
     if not within_deadline(config()):
@@ -116,16 +118,17 @@ def submit_live_url(url: str, evidence: str = '') -> dict:
     now=time.time()
     db.execute("""INSERT INTO live_clips
        (id,video_id,channel_id,title,source_url,rights_evidence,status,
-        attempts,score,created,updated)
-       VALUES (:id,:video,:channel,:title,:url,:rights,'QUEUED',0,0,:now,:now)""",
+        webcam_anchor,cut_target,attempts,score,created,updated)
+       VALUES (:id,:video,:channel,:title,:url,:rights,'QUEUED',:anchor,3,0,0,:now,:now)""",
         {'id':ident,'video':vid,'channel':channel_id,'title':title,
          'url':'https://www.youtube.com/watch?v='+vid,
-         'rights':permission['evidence'],'now':now})
+         'rights':permission['evidence'],'now':now,'anchor':webcam_anchor})
     record_right(vid,channel_id,'AUTHORIZED',
                  'Seleção manual: URL pública + VOD encerrado + licença declarada verificados.')
     db.enqueue('live_cut:'+ident,unique_key='livecut:'+ident)
     return {'queued':True,'clip_id':ident,'title':title,'channel_id':channel_id,
-            'message':'Live aceita para gerar corte. Publicação sempre manual.'}
+            'expected_cuts':3,'webcam_anchor':webcam_anchor,
+            'message':'Live aceita para gerar três cortes distintos com revisão individual.'}
 
 
 def _topic_fingerprint(title: str) -> str:
@@ -154,7 +157,7 @@ def enqueue_next():
     quota=state()
     if not settings.automatic or settings.emergency_stop or not within_deadline(quota['config']):
         return {'queued':False,'reason':'Automação desativada, emergência ou deadline.'}
-    if quota['approved']['lives_cuts']+quota['pending']['lives_cuts']>=5:
+    if quota['approved']['lives_cuts']+quota['pending']['lives_cuts']>=quota['target']['lives_cuts']:
         return {'queued':False,'reason':'Cinco cortes aprovados/em andamento.'}
     if quota['pending']['lives_cuts']:
         return {'queued':False,'reason':'Já existe um corte em processamento.'}
@@ -190,8 +193,9 @@ def enqueue_next():
             ident=db.uid()
             db.execute("""INSERT INTO live_clips
                (id,video_id,channel_id,title,source_url,rights_evidence,status,
-                attempts,score,created,updated)
-               VALUES (:id,:video,:channel,:title,:url,:rights,'QUEUED',0,:score,:now,:now)""",
+                webcam_anchor,cut_target,attempts,score,created,updated)
+               VALUES (:id,:video,:channel,:title,:url,:rights,'QUEUED',
+                       'bottom_left',3,0,:score,:now,:now)""",
                 {'id':ident,'video':vid,'channel':entry['channel_id'],
                  'title':entry.get('title','Live pública')[:250],
                  'url':entry['url'],'rights':permission['evidence'],

@@ -7,6 +7,7 @@ import CastPanel from './cast-panel';
 import SeoPanel from './seo-panel';
 import TextStyleLibrary from './text-style-library';
 import RadarOps from './radar-ops';
+import LiveStudioPanel from './live-studio-panel';
 import OperationsMonitor from './operations-monitor';
 import PublicationGroups, {groupPublications} from './publication-groups';
 import {Activity, ArrowUpRight, Bell, CheckCircle2, ChevronRight, Clapperboard, Download, Film, Gauge, Globe2, Import, LayoutDashboard, LoaderCircle, Pause, Play, Plus, Radar, RefreshCw, Settings2, ShieldCheck, Square, Users, X} from 'lucide-react';
@@ -113,7 +114,7 @@ export default function Home(){
           </form>
           {data.sources.map(src=><div className="list-row" key={src.id}><div><strong>{src.name}</strong><small>{src.error||src.url}</small></div><button onClick={()=>act(()=>api('sources/'+src.id+'/scan',{}),'Consulta RSS agendada.')}>Consultar</button></div>)}
         </section></>}
-       {tab==='Video Studio'&&<><div className="studio-grid"><section className="panel">
+       {tab==='Video Studio'&&<><LiveStudioPanel token={token} embedded/><div className="studio-grid"><section className="panel">
          <div className="section-title"><h2>Pré-visualização</h2>{selected&&<Badge status={selected.status}/>}</div>
          <button type="button" onClick={()=>setShowShortsZones(v=>!v)}>{showShortsZones?'Ocultar':'Mostrar'} zonas seguras do Shorts</button>
          <div className="preview-safe-shell">

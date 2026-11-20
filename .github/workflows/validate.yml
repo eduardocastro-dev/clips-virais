@@ -13,6 +13,21 @@ jobs:
           python-version: "3.13"
       - name: Compile all Python modules and tests
         run: python -m compileall -q backend tests
+  python-regressions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install backend test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r backend/requirements.txt -r backend/requirements-dev.txt
+      - name: Test multi-cut and API regressions
+        run: python -m pytest -q tests/test_live_multi_output.py tests/test_live_quota_radar.py tests/test_api_boot_smoke.py tests/test_scenarios_tv.py tests/test_operations_monitor.py
   web-build:
     runs-on: ubuntu-latest
     defaults:

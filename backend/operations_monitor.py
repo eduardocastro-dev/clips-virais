@@ -18,6 +18,7 @@ STAGES = {
         ("DOWNLOADING_EXCERPT", "Obtendo trecho da live"),
         ("RENDERING", "Editando e renderizando MP4"),
         ("VALIDATING", "Validando áudio e vídeo"),
+        ("RENDERED", "Corte pronto"),
         ("READY_FOR_REVIEW", "Pronto para revisão humana"),
     ],
     "pipeline": [
@@ -60,6 +61,10 @@ def _format_job(job, videos, clips, events, now):
     stage_code = (clip or {}).get("stage") if family == "clip" else (video or {}).get("stage") if family == "pipeline" else None
     if family == "background" and kind == "radar20_scan":
         stage_text = str(db.get_setting("radar20_scan_status", "Consultando canais públicos."))
+    elif family == "clip" and stage_code and "_" in stage_code:
+        parts=stage_code.rsplit("_",1)
+        step=next((text for code,text in STAGES['clip'] if code==parts[0]),None)
+        stage_text=(step+" · corte "+parts[1]+"/3") if step and parts[1].isdigit() else stage_code
     else:
         stage_text = next((text for code, text in STAGES.get(family, []) if code == stage_code),
                           stage_code or ("Na fila" if job["status"] == "QUEUED" else "Iniciando"))
@@ -97,6 +102,13 @@ def _format_job(job, videos, clips, events, now):
              "created":last_event["created"]} if last_event else None
         ),
         "priority":_priority(kind),
+        "expected_cuts":int(clip.get("cut_target") or 3) if clip else None,
+        "completed_cuts":(
+            db.rows("""SELECT COUNT(*) AS n FROM live_clip_outputs WHERE parent_id=:id
+                       AND status IN ('REVIEW_PENDING','APPROVED','DISCARDED')
+                       AND file_path IS NOT NULL""",
+                    {'id':clip['id']})[0]['n'] if clip else None
+        ),
     }
 
 

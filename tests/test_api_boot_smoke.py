@@ -14,4 +14,10 @@ def test_api_startup_has_health_and_live_clip_routes():
     assert any(path == "/api/videos/{id}/source-rights" and "POST" in methods for path, methods in routes)
     assert any(path == "/api/live-clips/from-url" and "POST" in methods
                for path, methods in routes)
+    assert any(path == "/api/live-clips/{parent_id}/outputs/{output_id}/decision"
+               and "POST" in methods for path, methods in routes)
+    assert any(path == "/api/live-clips/{parent_id}/outputs/{output_id}/file"
+               and "GET" in methods for path, methods in routes)
+    assert any(path == "/api/live-clips/{parent_id}/reprocess"
+               and "POST" in methods for path, methods in routes)
 

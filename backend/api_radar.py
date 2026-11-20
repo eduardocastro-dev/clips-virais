@@ -122,20 +122,22 @@ def revoke_permission(channel_id: str):
 class ManualLiveInput(BaseModel):
     url: str = Field(min_length=20,max_length=350)
     evidence: str = Field(default='',max_length=2000)
+    webcam_anchor: str = Field(default='bottom_left',pattern=r'^(bottom_left|top_left|bottom_right|top_right)$')
 
 
 @router.post('/live-clips/from-url')
 def queue_live_from_url(body: ManualLiveInput):
     from backend.live_cuts import submit_live_url
     try:
-        return submit_live_url(body.url,body.evidence)
+        return submit_live_url(body.url,body.evidence,body.webcam_anchor)
     except (ValueError,IntegrationError) as exc:
         raise HTTPException(422,str(exc)) from None
 
 
 @router.get('/live-clips')
 def list_live_clips():
-    return {'items':db.rows('SELECT * FROM live_clips ORDER BY created DESC LIMIT 100')}
+    from backend.api_live_groups import grouped_lives
+    return grouped_lives()
 
 
 class ClipDecision(BaseModel):
@@ -148,6 +150,9 @@ def live_clip_decision(id: str, body: ClipDecision):
     if not current:
         raise HTTPException(404,'Corte não encontrado.')
     clip=current[0]
+    outputs=db.rows('SELECT COUNT(*) AS n FROM live_clip_outputs WHERE parent_id=:id',{'id':id})
+    if outputs and outputs[0]['n']>1:
+        raise HTTPException(409,'Revise e aprove cada um dos três cortes individualmente.')
     if clip['status']=='APPROVED' and body.decision=='approve':
         return {'status':'APPROVED'}
     if clip['status'] not in ('REVIEW_PENDING','APPROVED'):

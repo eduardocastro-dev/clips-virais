@@ -33,7 +33,9 @@ def auth(authorization: Annotated[str | None, Header()] = None):
 protected = [Depends(auth)]
 
 from backend.api_radar import router as radar_router
+from backend.api_live_groups import router as live_groups_router
 app.include_router(radar_router, dependencies=protected)
+app.include_router(live_groups_router, dependencies=protected)
 
 
 

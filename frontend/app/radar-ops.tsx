@@ -1,6 +1,7 @@
 'use client';
 import {useCallback,useEffect,useState} from 'react';
-import {RefreshCw,ShieldCheck,Download,Clipboard} from 'lucide-react';
+import {RefreshCw,ShieldCheck} from 'lucide-react';
+import LiveStudioPanel from './live-studio-panel';
 
 type Row=Record<string,any>;
 type Props={token:string;mode:'radar'|'cuts'};
@@ -20,30 +21,29 @@ export default function RadarOps({token,mode}:Props){
   const [creators,setCreators]=useState<Row>({channels:[]});
   const [radar,setRadar]=useState<Row>({radar:{top:[]},recent_lives:{items:[]}});
   const [allow,setAllow]=useState<Row>({channels:[]});
-  const [cuts,setCuts]=useState<Row[]>([]);
   const [channelId,setChannelId]=useState('');
   const [rightsEvidence,setRightsEvidence]=useState('');
   const [manualLiveUrl,setManualLiveUrl]=useState('');
   const [manualLiveEvidence,setManualLiveEvidence]=useState('');
+  const [webcamAnchor,setWebcamAnchor]=useState('bottom_left');
+  const [sourceToAuthorize,setSourceToAuthorize]=useState('');
+  const [sourceEvidence,setSourceEvidence]=useState('');
   const [deadline,setDeadline]=useState('23:59');
   const [minLiveScore,setMinLiveScore]=useState(70);
   const [error,setError]=useState('');
   const [notice,setNotice]=useState('');
   const [busy,setBusy]=useState(false);
-  const [videoUrl,setVideoUrl]=useState('');
-  const [videoId,setVideoId]=useState('');
   const refresh=useCallback(async()=>{
     const entries=await Promise.all([
       call(token,'daily-quota'),call(token,'viral-radar/top-creators'),
-      call(token,'viral-radar/latest'),call(token,'clipping-allowlist'),call(token,'live-clips')
+      call(token,'viral-radar/latest'),call(token,'clipping-allowlist')
     ]);
     setQuota(entries[0]);setCreators(entries[1]);setRadar(entries[2]);
-    setAllow(entries[3]);setCuts(entries[4].items||[]);
+    setAllow(entries[3]);
     setDeadline(entries[0]?.config?.deadline_local||'23:59');
     setMinLiveScore(entries[0]?.config?.min_live_score||70);
   },[token]);
   useEffect(()=>{refresh().catch(e=>setError(e.message))},[refresh]);
-  useEffect(()=>()=>{if(videoUrl)URL.revokeObjectURL(videoUrl)},[videoUrl]);
   async function act(path:string,body?:unknown,method='POST',success='Alteração registrada.'){
     setBusy(true);setError('');setNotice('');
     try{await call(token,path,body,method);await refresh();setNotice(success)}
@@ -53,23 +53,23 @@ export default function RadarOps({token,mode}:Props){
     e.preventDefault();setBusy(true);setError('');setNotice('');
     try{
       const outcome=await call(token,'live-clips/from-url',{
-        url:manualLiveUrl.trim(), evidence:manualLiveEvidence.trim()
+        url:manualLiveUrl.trim(), evidence:manualLiveEvidence.trim(),
+        webcam_anchor:webcamAnchor
       },'POST');
       await refresh();
       setNotice(outcome.message||'Live encaminhada à fila de cortes.');
       setManualLiveUrl('');setManualLiveEvidence('');
     }catch(e){setError((e as Error).message)}finally{setBusy(false)}
   }
-  async function preview(id:string,download=false){
-    setError('');setBusy(true);
+  async function submitRadarLive(live:Row,permission:string){
+    setBusy(true);setError('');setNotice('');
     try{
-      const r=await fetch('/api/live-clips/'+id+'/file',{headers:{Authorization:'Bearer '+token}});
-      if(!r.ok)throw Error('Arquivo de vídeo indisponível: HTTP '+r.status);
-      const url=URL.createObjectURL(await r.blob());
-      if(download){
-        const a=document.createElement('a');a.href=url;a.download='corte-live-'+id+'.mp4';
-        document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),120000);
-      }else{setVideoUrl(url);setVideoId(id)}
+      const outcome=await call(token,'live-clips/from-url',{
+        url:live.url,evidence:permission,webcam_anchor:webcamAnchor
+      },'POST');
+      await refresh();
+      setSourceToAuthorize('');setSourceEvidence('');
+      setNotice(outcome.message||'Três cortes da live encaminhados ao worker.');
     }catch(e){setError((e as Error).message)}finally{setBusy(false)}
   }
   const shortCount=quota?.approved?.shorts||0;
@@ -125,19 +125,27 @@ export default function RadarOps({token,mode}:Props){
       </section>
     </>:<>
       <section className="panel">
-        <h2>Enviar link de live para corte</h2>
-        <p className="muted">Cole o link de um VOD público já encerrado (últimos 30 dias). O sistema verifica o link sem YouTube Data API e encaminha o corte à revisão; nenhuma postagem é automática. A reutilização exige autorização do titular.</p>
+        <h2>Enviar link de live · gerar três cortes distintos</h2>
+        <p className="muted">Cole o link de um VOD público já encerrado (últimos 30 dias). O sistema verifica o link sem YouTube Data API e produz três cortes distintos, acompanhados no Video Studio; nenhuma postagem é automática. A reutilização exige autorização do titular.</p>
         <form className="radar-allowlist" onSubmit={submitManualLive}>
           <label>URL da live encerrada
             <input type="url" required placeholder="https://www.youtube.com/live/..."
               value={manualLiveUrl} onChange={e=>setManualLiveUrl(e.target.value)}/>
           </label>
-          <label>Comprovante de autorização (se ainda não cadastrou o canal)
+          <label>Autorização de reutilização da live (obrigatória se o canal ainda não estiver autorizado)
             <textarea rows={3} maxLength={2000} value={manualLiveEvidence}
               onChange={e=>setManualLiveEvidence(e.target.value)}
               placeholder="Link ou termos de permissão do criador para produzir e publicar cortes"/>
           </label>
-          <button className="primary" type="submit" disabled={busy||!manualLiveUrl.trim()}>Enviar live para cortes</button>
+          <label>Posição da webcam no vídeo-fonte
+            <select value={webcamAnchor} onChange={e=>setWebcamAnchor(e.target.value)}>
+              <option value="bottom_left">Inferior esquerdo (Patife)</option>
+              <option value="top_left">Superior esquerdo</option>
+              <option value="bottom_right">Inferior direito</option>
+              <option value="top_right">Superior direito</option>
+            </select>
+          </label>
+          <button className="primary" type="submit" disabled={busy||!manualLiveUrl.trim()}>Enviar live · gerar 3 cortes</button>
         </form>
       </section>
       <section className="panel">
@@ -159,28 +167,29 @@ export default function RadarOps({token,mode}:Props){
           <strong>{l.title}</strong><small>{l.creator} · {l.published_at?.slice(0,10)} · score {l.score}</small>
           <small>{(allow.channels||[]).some((a:Row)=>a.channel_id===l.channel_id)?'Autorização declarada':'Aguardando autorização de corte'}</small>
           <a href={l.url} target="_blank" rel="noopener noreferrer">Assistir ao VOD original</a>
+          {(allow.channels||[]).some((a:Row)=>a.channel_id===l.channel_id)
+            ?<button disabled={busy} onClick={()=>void submitRadarLive(l,'')}>Gerar 3 cortes desta live</button>
+            :<div className="live-source-authorization">
+              <button type="button" disabled={busy}
+                onClick={()=>setSourceToAuthorize(sourceToAuthorize===l.id?'':l.id)}>
+                <ShieldCheck size={14}/> Incluir autorização e gerar 3 cortes
+              </button>
+              {sourceToAuthorize===l.id&&<form onSubmit={e=>{e.preventDefault();
+                void submitRadarLive(l,sourceEvidence.trim())}}>
+                <label>Comprovação de permissão do criador para reutilizar a transmissão
+                  <textarea required minLength={15} maxLength={2000} rows={3}
+                    placeholder="Link ou licença que autorize produção e publicação de cortes"
+                    value={sourceEvidence} onChange={e=>setSourceEvidence(e.target.value)}/>
+                </label>
+                <button disabled={busy||sourceEvidence.trim().length<15} type="submit">
+                  Registrar autorização e iniciar produção
+                </button>
+              </form>}
+            </div>}
         </div>)}
         {!radar.recent_lives?.items?.length&&<p className="muted">Nenhuma live pública encerrada foi identificada neste período.</p>}
       </section>
-      <section className="panel">
-        <h2>Cortes para revisão humana</h2>
-        {!cuts.length&&<p className="muted">Nenhum corte iniciado. Envie um link acima ou aguarde a busca por lives recentes e autorizadas.</p>}
-        {cuts.map((item:Row)=><div className="radar-result" key={item.id}>
-          <strong>{item.title}</strong>
-          <small>Status {item.status} · nota {item.score??'não avaliado'}/100 · tentativas {item.attempts||0}/3</small>
-          {item.error&&<p className="error">{item.error}</p>}
-          {item.status==='REVIEW_PENDING'&&<div className="actions">
-            <button disabled={busy} onClick={()=>act('live-clips/'+item.id+'/decision',{decision:'approve'},'POST','Corte revisado e aprovado manualmente.')}>Aprovar para postagem manual</button>
-            <button disabled={busy} onClick={()=>{if(window.confirm('Descartar este corte? O MP4 permanece no histórico.'))act('live-clips/'+item.id+'/decision',{decision:'discard'},'POST','Corte descartado da fila.')}}>Descartar</button>
-          </div>}
-          {item.file_path&&<div className="actions">
-            <button disabled={busy} onClick={()=>preview(item.id)}><Clipboard size={14}/> Revisar</button>
-            <button disabled={busy} onClick={()=>preview(item.id,true)}><Download size={14}/> Baixar MP4</button>
-            <button onClick={()=>call(token,'live-clips/'+item.id+'/metadata').then(m=>navigator.clipboard.writeText([m.title,m.description,(m.hashtags||[]).join(' ')].join('\n\n'))).then(()=>setNotice('Texto da postagem copiado.')).catch(e=>setError(e.message))}><Clipboard size={14}/> Copiar texto</button>
-          </div>}
-        </div>)}
-        {videoUrl&&<div className="radar-player"><strong>Revisando corte {videoId}</strong><video src={videoUrl} controls playsInline preload="metadata"/><button onClick={()=>setVideoUrl('')}>Fechar prévia</button></div>}
-      </section>
+      <LiveStudioPanel token={token}/>
     </>}
   </div>;
 }

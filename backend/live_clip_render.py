@@ -198,7 +198,7 @@ def _subtitles(words, start, end, target):
             timecodes.append(r'{\kf'+str(centis)+'}'+clean_subtitle(word['text']))
         lines.append('Dialogue: 0,'+subtitle_time(group['start'])+','+
                      subtitle_time(group['end']+.08)+',Default,,0,0,0,,'
-                     +r'{\an2\pos(540,1000)\fad(45,50)}'+' '.join(timecodes))
+                     +r'{\an2\pos(540,1735)\fad(45,50)}'+' '.join(timecodes))
     target.write_text('\n'.join(lines)+'\n',encoding='utf-8')
     return len(groups)
 
@@ -208,19 +208,86 @@ def _set_stage(clip_id, stage):
                {'id':clip_id,'stage':stage,'now':time.time()})
 
 
+def _metadata_for(clip, choice, ordinal, total, target_lufs):
+    return {
+        'title':(clip['title'][:68]+' — corte '+str(ordinal)+'/'+str(total))[:100],
+        'description':'Trecho da live original: '+clip['source_url']+
+            f' (de {choice["start"]:.0f}s a {choice["end"]:.0f}s). Canal: '+
+            clip['channel_id']+'. Créditos ao criador original. Uso autorizado pelo operador.',
+        'hashtags':['#GTA6','#CortesDeLive','#Games'],
+        'source_url':clip['source_url'],'channel_id':clip['channel_id'],
+        'parent_live_id':clip['id'],'ordinal':ordinal,'total_cuts':total,
+        'start_seconds':choice['start'],'end_seconds':choice['end'],
+        'score':choice['score'],'reason':choice['reason'],
+        'alignment':'whisperx_forced_alignment','licensed':True,
+        'human_review_required':True,'loudness_target_lufs':target_lufs,
+        'layout':'streamer_top_gameplay_bottom',
+        'webcam_anchor':clip.get('webcam_anchor') or 'bottom_left',
+    }
+
+
+def _persist_output(clip, choice, ordinal, output, cover, metadata_file, title):
+    previous=db.rows(
+        'SELECT id FROM live_clip_outputs WHERE parent_id=:parent AND ordinal=:ordinal',
+        {'parent':clip['id'],'ordinal':ordinal})
+    record_id=previous[0]['id'] if previous else db.uid()
+    now=time.time()
+    params={'id':record_id,'parent':clip['id'],'ordinal':ordinal,'title':title,
+            'score':choice['score'],'start':choice['start'],'end':choice['end'],
+            'file':str(output.relative_to(db.ROOT)),
+            'cover':str(cover.relative_to(db.ROOT)),
+            'meta':str(metadata_file.relative_to(db.ROOT)),'now':now}
+    if previous:
+        db.execute("""UPDATE live_clip_outputs SET status='REVIEW_PENDING',
+            score=:score,segment_start=:start,segment_end=:end,title=:title,
+            file_path=:file,cover_path=:cover,metadata_path=:meta,
+            error=NULL,updated=:now WHERE id=:id""",params)
+    else:
+        db.execute("""INSERT INTO live_clip_outputs
+            (id,parent_id,ordinal,title,status,score,segment_start,segment_end,
+             file_path,cover_path,metadata_path,created,updated)
+            VALUES (:id,:parent,:ordinal,:title,'REVIEW_PENDING',:score,:start,
+                    :end,:file,:cover,:meta,:now,:now)""",params)
+
+
+def _validated_output(clip, ordinal):
+    rows=db.rows("""SELECT * FROM live_clip_outputs WHERE parent_id=:parent
+                    AND ordinal=:ordinal""",
+                 {'parent':clip['id'],'ordinal':ordinal})
+    if not rows:
+        return None
+    row=rows[0]
+    if row['status'] in ('REVIEW_PENDING','APPROVED') and row['file_path']:
+        try:
+            file=db.safe_file(row['file_path'])
+        except ValueError:
+            return None
+        if file.is_file() and file.stat().st_size>1024:
+            return row
+    return None
+
+
 def render_clip(clip_id):
+    """One WhisperX analysis, three distinct complete render/validation passes.
+
+    Each completed child persists before the next begins so technical retries
+    do not download/re-render already accepted cuts.
+    """
     from backend.live_cuts import authorized_channel
     from backend.audio_mix import TARGET_LUFS
+    from backend.live_clip_layout import graph as live_graph,validate_anchor
+    from backend.daily_quota import config as quota_config,within_deadline
     records=db.rows('SELECT * FROM live_clips WHERE id=:id',{'id':clip_id})
-    if not records:
-        raise ValueError('Corte de live não encontrado.')
+    if not records:raise ValueError('Live não encontrada.')
     clip=records[0]
     if not authorized_channel(clip['channel_id']):
         raise IntegrationError('Direitos de cortes não documentados na allowlist.')
-    from backend.daily_quota import config as quota_config,within_deadline
     if not within_deadline(quota_config()):
-        raise IntegrationError('Deadline diário atingido antes do início do corte.')
-    db.execute("UPDATE live_clips SET status='PROCESSING',stage='VERIFYING',updated=:now WHERE id=:id",
+        raise IntegrationError('Deadline diário atingido antes do início da live.')
+    anchor=validate_anchor(clip.get('webcam_anchor') or 'bottom_left')
+    total=max(3,int(clip.get('cut_target') or 3))
+    db.execute("""UPDATE live_clips SET status='PROCESSING',stage='VERIFYING',
+                  updated=:now,error=NULL WHERE id=:id""",
                {'now':time.time(),'id':clip_id})
     verified_live({'id':clip['video_id'],'channel_id':clip['channel_id']})
     folder=db.ROOT/'videos'/'processing'/'live_cuts'/clip_id
@@ -231,83 +298,103 @@ def render_clip(clip_id):
     volume,wav=_volume_levels(audio,folder)
     _set_stage(clip_id,'TRANSCRIBING')
     transcript=_whisperx_words(wav,folder)
-    from backend.daily_quota import config as quota_config
     _set_stage(clip_id,'SELECTING')
-    candidates=_score_candidates(transcript,volume,min_score=quota_config()['min_live_score'])
-    if not candidates:
-        raise IntegrationError('Sem momento autossuficiente acima do score mínimo configurado; selecionar outra live.')
-    choice=candidates[0]
-    _set_stage(clip_id,'DOWNLOADING_EXCERPT')
-    source=_get_range(clip['source_url'],choice['start'],choice['end'],folder)
-    sub=folder/'live-captions.ass'
-    count=_subtitles(transcript['words'],choice['start'],choice['end'],sub)
-    if not count:
-        raise IntegrationError('Sem legenda alinhada para o trecho escolhido.')
-    target=db.ROOT/'videos'/'final'/'live_cuts'/clip_id
-    target.mkdir(parents=True,exist_ok=True)
-    output=target/'cut.mp4'
+    choices_file=folder/'candidates.json'
+    if choices_file.is_file():
+        try:
+            candidates=json.loads(choices_file.read_text('utf-8'))
+        except (OSError,ValueError):
+            candidates=[]
+    else:
+        candidates=[]
+    if len(candidates)<total:
+        candidates=_score_candidates(
+            transcript,volume,min_score=quota_config()['min_live_score'])
+        if len(candidates)<total:
+            raise IntegrationError(
+                f'Só {len(candidates)} trechos distintos passaram no score mínimo. '
+                f'São necessários {total}; não serão inventados cortes ou reduzida a nota.')
+        db.atomic(choices_file,json.dumps(candidates,ensure_ascii=False,indent=2))
+    selections=candidates[:total]
+    output_dir=db.ROOT/'videos'/'final'/'live_cuts'/clip_id
+    output_dir.mkdir(parents=True,exist_ok=True)
     ff=media.binary('ffmpeg')
-    # Respect the original picture by keeping the entire gameplay frame in a
-    # centered band. Background fills 9:16 with a blurred, licensed source copy.
-    graph=(
-        '[0:v]split=2[orig][blurinput];'
-        '[blurinput]scale=1080:1920:force_original_aspect_ratio=increase,'
-        'crop=1080:1920,boxblur=30:2[bg];'
-        '[orig]scale=1080:-2:force_original_aspect_ratio=decrease,'
-        'setsar=1[fg];'
-        '[bg][fg]overlay=x=(W-w)/2:y=(H-h)/2:shortest=1,'
-        'ass='+str(sub).replace('\\','\\\\').replace(':',r'\:')+'[v];'
-        '[0:a]highpass=f=80,acompressor=threshold=0.12:ratio=2.2:attack=12:'
-        'release=110,loudnorm=I=-14:TP=-1.5:LRA=9[a]'
-    )
-    _set_stage(clip_id,'RENDERING')
-    temporary=folder/'render.mp4'
-    _run([ff,'-hide_banner','-loglevel','error','-y','-i',str(source),
-          '-filter_complex',graph,'-map','[v]','-map','[a]',
-          '-c:v','libx264','-preset','veryfast','-crf','22','-r','30',
-          '-pix_fmt','yuv420p','-c:a','aac','-b:a','192k',
-          '-movflags','+faststart',str(temporary)],timeout=1500)
-    _set_stage(clip_id,'VALIDATING')
-    probe=media.probe(temporary)
-    stream=next((x for x in probe['streams'] if x['codec_type']=='video'),{})
-    if stream.get('codec_name')!='h264' or (stream.get('width'),stream.get('height'))!=(1080,1920):
-        raise IntegrationError('Exportação do corte não está em H264 1080x1920.')
-    duration=float(probe['format']['duration'])
-    if not MIN_DURATION-.3<=duration<=MAX_DURATION+.3:
-        raise IntegrationError('Duração do corte fora da janela 20–60 segundos.')
-    # Real decode and final integrated loudness checks BEFORE review acceptance.
-    media.run([ff,'-v','error','-xerror','-i',str(temporary),'-f','null','-'],timeout=180)
-    measured=subprocess.run([ff,'-hide_banner','-nostats','-i',str(temporary),
-                             '-af','ebur128=peak=true','-f','null','-'],
-                            capture_output=True,timeout=180)
-    if measured.returncode:
-        raise IntegrationError('Não foi possível medir o loudness do corte.')
-    readings=re.findall(rb'I:\s*(-?\d+(?:\.\d+)?)\s*LUFS',measured.stderr)
-    if not readings or abs(float(readings[-1])-(-14.0))>1.0:
-        raise IntegrationError('Loudness final fora de -14 LUFS ±1; reprovar corte.')
-    if not within_deadline(quota_config()):
-        raise IntegrationError('Corte excedeu o deadline e não pode contar para a cota de hoje.')
-    import shutil
-    shutil.copy2(temporary,output)
-    cover=target/'cover.jpg'
-    media.run([ff,'-v','error','-y','-ss','1','-i',str(output),
-               '-frames:v','1','-q:v','3',str(cover)],timeout=30)
-    title=(clip['title'][:72]+' — destaque da live')[:100]
-    metadata={'title':title,'description':'Trecho da live original: '+clip['source_url']+
-              f' (início em {choice["start"]:.0f}s). Canal: {clip["channel_id"]}. '
-              'Créditos ao criador original. Uso autorizado pelo operador.',
-              'hashtags':['#GTA6','#CortesDeLive','#Games'],
-              'source_url':clip['source_url'],'channel_id':clip['channel_id'],
-              'start_seconds':choice['start'],'end_seconds':choice['end'],
-              'score':choice['score'],'reason':choice['reason'],
-              'alignment':'whisperx_forced_alignment','licensed':True,
-              'human_review_required':True,'loudness_target_lufs':TARGET_LUFS}
-    db.atomic(target/'metadata.json',json.dumps(metadata,ensure_ascii=False,indent=2))
-    db.execute("""UPDATE live_clips SET status='REVIEW_PENDING',stage='READY_FOR_REVIEW',score=:score,
-        segment_start=:start,segment_end=:end,file_path=:file,updated=:now,error=NULL
-        WHERE id=:id""",{'id':clip_id,'score':choice['score'],
-                          'start':choice['start'],'end':choice['end'],
-                          'file':str(output.relative_to(db.ROOT)),'now':time.time()})
+    latest=None
+    for index,choice in enumerate(selections,1):
+        if not authorized_channel(clip['channel_id']):
+            raise IntegrationError('Autorização de corte revogada durante a produção.')
+        if _validated_output(clip,index):
+            _set_stage(clip_id,f'RENDERED_{index}')
+            continue
+        if not within_deadline(quota_config()):
+            raise IntegrationError('Deadline da produção atingido antes de concluir os três cortes.')
+        individual=folder/f'cut-{index:02d}'
+        individual.mkdir(parents=True,exist_ok=True)
+        _set_stage(clip_id,f'DOWNLOADING_EXCERPT_{index}')
+        source=_get_range(clip['source_url'],choice['start'],choice['end'],individual)
+        subtitles=individual/'live-captions.ass'
+        count=_subtitles(transcript['words'],choice['start'],choice['end'],subtitles)
+        if not count:
+            raise IntegrationError(f'Corte {index}: legenda alinhada indisponível.')
+        _set_stage(clip_id,f'RENDERING_{index}')
+        temporary=individual/'render.mp4'
+        _run([ff,'-hide_banner','-loglevel','error','-y','-i',str(source),
+              '-filter_complex',live_graph(str(subtitles),anchor),
+              '-map','[v]','-map','[a]','-t',str(choice['end']-choice['start']),
+              '-c:v','libx264','-preset','veryfast','-crf','22','-r','30',
+              '-pix_fmt','yuv420p','-c:a','aac','-b:a','192k',
+              '-movflags','+faststart',str(temporary)],timeout=1800)
+        _set_stage(clip_id,f'VALIDATING_{index}')
+        probe=media.probe(temporary)
+        video_stream=next((x for x in probe['streams'] if x['codec_type']=='video'),{})
+        if (video_stream.get('codec_name')!='h264' or
+            (video_stream.get('width'),video_stream.get('height'))!=(1080,1920)):
+            raise IntegrationError(f'Corte {index}: exportação não está em H264 1080x1920.')
+        duration=float(probe['format']['duration'])
+        if not MIN_DURATION-.3<=duration<=MAX_DURATION+.3:
+            raise IntegrationError(f'Corte {index}: duração fora de 20–60 s.')
+        media.run([ff,'-v','error','-xerror','-i',str(temporary),
+                   '-f','null','-'],timeout=180)
+        measured=subprocess.run([ff,'-hide_banner','-nostats','-i',str(temporary),
+                                 '-af','ebur128=peak=true','-f','null','-'],
+                                capture_output=True,timeout=180)
+        if measured.returncode:
+            raise IntegrationError(f'Corte {index}: não foi possível medir loudness.')
+        values=re.findall(rb'I:\s*(-?\d+(?:\.\d+)?)\s*LUFS',measured.stderr)
+        if not values or abs(float(values[-1])-TARGET_LUFS)>1.0:
+            raise IntegrationError(f'Corte {index}: loudness fora de -14 LUFS ±1.')
+        import shutil
+        published=output_dir/f'cut-{index:02d}.mp4'
+        shutil.copy2(temporary,published)
+        cover=output_dir/f'cover-{index:02d}.jpg'
+        media.run([ff,'-v','error','-y','-ss','1','-i',str(published),
+                   '-frames:v','1','-q:v','3',str(cover)],timeout=30)
+        metadata=_metadata_for(clip,choice,index,total,TARGET_LUFS)
+        metadata_file=output_dir/f'metadata-{index:02d}.json'
+        db.atomic(metadata_file,json.dumps(metadata,ensure_ascii=False,indent=2))
+        _persist_output(clip,choice,index,published,cover,metadata_file,
+                        metadata['title'])
+        db.log_event(None,'live_cuts','CUT_READY',
+                     f"{clip['title']}: corte {index}/{total} renderizado e validado.")
+        latest=metadata
+    completed=db.rows("""SELECT * FROM live_clip_outputs WHERE parent_id=:id
+                         AND status IN ('REVIEW_PENDING','APPROVED')
+                         AND file_path IS NOT NULL ORDER BY ordinal""",
+                      {'id':clip_id})
+    if not authorized_channel(clip['channel_id']):
+        raise IntegrationError('Autorização de corte revogada antes da revisão humana.')
+    if len(completed)<total:
+        raise IntegrationError(
+            f'Foram concluídos somente {len(completed)}/{total} cortes; '
+            'manter produção pendente e retentar os restantes.')
+    first=completed[0]
+    db.execute("""UPDATE live_clips SET status='REVIEW_PENDING',
+        stage='READY_FOR_REVIEW',score=:score,segment_start=:start,
+        segment_end=:end,file_path=:path,error=NULL,updated=:now WHERE id=:id""",
+        {'id':clip_id,'score':first['score'],'start':first['segment_start'],
+         'end':first['segment_end'],'path':first['file_path'],
+         'now':time.time()})
     record_right(clip['video_id'],clip['channel_id'],'REVIEW_PENDING',
-                 'VOD público, licença declarada, legenda alinhada e render validado; aguardando operador.')
-    return metadata
+                 f'{total} cortes distintos renderizados, validados e aguardando revisão humana.')
+    return {'parent_live_id':clip_id,'total_cuts':total,
+            'status':'REVIEW_PENDING','last_cut':latest}

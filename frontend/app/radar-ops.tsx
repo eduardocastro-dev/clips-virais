@@ -167,9 +167,15 @@ export default function RadarOps({token,mode}:Props){
         </div>)}
       </section>
       <section className="panel">
-        <div className="section-title"><h2>Lives públicas encerradas (M−1)</h2><button disabled={busy} onClick={()=>act('viral-radar/scan',undefined,'POST','Pesquisa agendada.')}><RefreshCw size={14}/> Reescanear</button></div>
+        <div className="section-title"><h2>Lives públicas encerradas · últimos 30 dias</h2><button disabled={busy} onClick={()=>act('viral-radar/scan',undefined,'POST','Pesquisa agendada.')}><RefreshCw size={14}/> Reescanear</button></div>
+        <p className="muted">Prioridade aos replays encerrados mais recentemente.
+          O indicador de frescor é calculado pela idade da live e não representa
+          visualizações nem uma previsão garantida de hype.</p>
         {(radar.recent_lives?.items||[]).slice(0,30).map((l:Row)=><div className="radar-result" key={l.id}>
-          <strong>{l.title}</strong><small>{l.creator} · {l.published_at?.slice(0,10)} · score {l.score}</small>
+          <strong>{l.title}</strong>
+          <small>{l.creator} · encerrada {l.ended_at?.slice(0,10)||'data indisponível'}
+            {' '}· frescor {l.hype_recency_score??'—'}/100
+            {' '}· score viral {l.score??'indisponível'}</small>
           <small>{(allow.channels||[]).some((a:Row)=>a.channel_id===l.channel_id&&(!a.video_id||a.video_id===l.id))?'Autorização declarada':'Aguardando autorização de corte'}</small>
           <a href={l.url} target="_blank" rel="noopener noreferrer">Assistir ao VOD original</a>
           {(allow.channels||[]).some((a:Row)=>a.channel_id===l.channel_id&&(!a.video_id||a.video_id===l.id))

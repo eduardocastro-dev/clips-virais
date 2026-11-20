@@ -164,6 +164,11 @@ def _metadata(raw):
     try:
         timestamp=datetime.fromisoformat(time_string.replace('Z','+00:00')).timestamp()
     except (ValueError,TypeError):timestamp=None
+    # Once a broadcast ends, liveBroadcastContent returns 'none'. Occasionally
+    # the API omits actualEndTime, but an actualStartTime and finished VOD
+    # duration still prove this was an archived stream (not a scheduled event).
+    finished_by_replay=(not ended and bool(live.get('actualStartTime')) and
+                        content_status=='none' and duration>0)
     return {
         'id':video_id,'title':str(snippet.get('title') or '')[:300],
         'description':str(snippet.get('description') or '')[:4000],
@@ -174,7 +179,7 @@ def _metadata(raw):
         'availability':'public' if privacy=='public' else 'private' if privacy=='private' else 'unlisted' if privacy=='unlisted' else 'unknown',
         'age_limit':18 if rating.get('ytRating')=='ytAgeRestricted' else 0,
         'is_live':is_streaming,
-        'live_status':'was_live' if ended else 'is_live' if is_streaming else 'not_live',
+        'live_status':'was_live' if ended or finished_by_replay else 'is_live' if is_streaming else 'not_live',
         'liveStreamingDetails':live,
         'view_count':int(stats['viewCount']) if 'viewCount' in stats else None,
         'like_count':int(stats['likeCount']) if 'likeCount' in stats else None,

@@ -7,7 +7,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from backend import core as db
 from backend.integrations import IntegrationError
-from backend.public_youtube import video_id_from_url, public_video_info, public_ended_live, video_published_at
+from backend.public_youtube import (video_id_from_url, public_video_info,
+                                    public_ended_live, live_rejection_reason)
 from backend.viral_radar20 import RADAR_WINDOW_DAYS, _utc_time, CHANNEL_PATTERN, allowed_public_video
 
 MIN_SCORE = 70
@@ -80,19 +81,32 @@ def record_right(video_id: str, channel_id: str, outcome: str, message: str):
     _write(RIGHTS_LOG,data)
 
 
+def _recent_vod_metadata(video_id: str) -> dict:
+    """Retry stale YouTube API cache once if a recent finished stream looks invalid."""
+    url='https://www.youtube.com/watch?v='+video_id
+    info=public_video_info(url)
+    if not public_ended_live(info,days=RADAR_WINDOW_DAYS):
+        from backend.youtube_data import configured
+        if configured():
+            # Live broadcasts switch from live/upcoming to archived shortly
+            # after ending. A 6h metadata cache can hold the old status.
+            info=public_video_info(url,fresh=True)
+    return info
+
+
 def verified_live(entry: dict):
-    """Confirm rights and the public, ended VOD using anonymous metadata only."""
+    """Confirm authorized, ended VOD using real broadcast completion metadata."""
     video_id=str(entry.get('video_id') or entry.get('id') or '')
     if not re.fullmatch(r'[A-Za-z0-9_-]{11}',video_id):
         raise ValueError('ID de live inválido.')
     channel_id=str(entry.get('channel_id') or '')
     if not authorized_channel(channel_id,video_id):
         raise ValueError('Live fora da clipping_allowlist.json (autorização obrigatória).')
-    info=public_video_info('https://www.youtube.com/watch?v='+video_id)
+    info=_recent_vod_metadata(video_id)
     if info.get('channel_id')!=channel_id:
         raise ValueError('O canal da live não corresponde à autorização cadastrada.')
     if not public_ended_live(info,days=RADAR_WINDOW_DAYS):
-        raise ValueError('A URL deve ser um VOD público, encerrado, não restrito, publicado nos últimos 30 dias.')
+        raise ValueError(live_rejection_reason(info,days=RADAR_WINDOW_DAYS))
     return info
 
 
@@ -107,7 +121,7 @@ def submit_live_url(url: str, evidence: str = '', webcam_anchor: str='bottom_lef
     # WhisperX runs in the worker image (not the API image). The worker
     # explicitly checks this prerequisite before accepting/rendering a job.
     # No cookies, account, YouTube Data API key or video download for this lookup.
-    info=public_video_info('https://www.youtube.com/watch?v='+vid)
+    info=_recent_vod_metadata(vid)
     channel_id=str(info.get('channel_id') or '')
     if not CHANNEL_PATTERN.fullmatch(channel_id):
         raise ValueError('O canal original não pôde ser identificado pelo link público.')
@@ -117,8 +131,9 @@ def submit_live_url(url: str, evidence: str = '', webcam_anchor: str='bottom_lef
         record_right(vid,channel_id,'BLOCKED','Canal sem permissão de corte cadastrada.')
         raise ValueError('Informe uma autorização válida para reutilizar a live do canal UC '+channel_id+'.')
     if not public_ended_live(info,days=RADAR_WINDOW_DAYS):
-        record_right(vid,channel_id,'BLOCKED','VOD não confirmado como público, encerrado e recente.')
-        raise ValueError('É necessário um VOD público, encerrado e publicado nos últimos 30 dias.')
+        reason=live_rejection_reason(info,days=RADAR_WINDOW_DAYS)
+        record_right(vid,channel_id,'BLOCKED',reason)
+        raise ValueError(reason)
     title=str(info.get('title') or 'Live pública autorizada')[:250]
     if recently_used(vid,title=title):
         raise ValueError('Essa live ou tema já foi utilizado nos últimos sete dias.')
@@ -179,21 +194,27 @@ def enqueue_next():
         return {'queued':False,
                 'reason':'WhisperX não instalado no worker; alinhamento obrigatório ausente.'}
     sources=_read('recent_lives.json', {'items':[]}).get('items',[])
-    ordered=sorted(sources,key=lambda x:(x.get('published_at',''), x.get('score',0)),reverse=True)
-    cutoff=datetime.now(timezone.utc)-timedelta(days=RADAR_WINDOW_DAYS)
+    # A scheduled live can have an old upload timestamp. Rank by the actual
+    # time it ended; use virality score only to break equal-age ties.
+    def recency(entry):
+        ended=_utc_time(entry.get('ended_at') or entry.get('published_at'))
+        return (ended or datetime.min.replace(tzinfo=timezone.utc),
+                float(entry.get('score') or -1))
+    ordered=sorted(sources,key=recency,reverse=True)
+    now=datetime.now(timezone.utc)
     for entry in ordered:
         vid=entry.get('id')
         if not vid or not authorized_channel(entry.get('channel_id',''),vid):
             continue
-        published=_utc_time(entry.get('published_at'))
-        if not published or published<cutoff or not entry.get('ended'):
+        ended=_utc_time(entry.get('ended_at') or entry.get('published_at'))
+        if not ended or not timedelta(0)<=now-ended<=timedelta(days=RADAR_WINDOW_DAYS) or not entry.get('ended'):
             continue
         if recently_used(vid,title=entry.get('title','')):
             continue
-        # Failures max 3 attempts per VOD; replace with another VOD thereafter.
+        # One source VOD must never be enqueued automatically twice, including
+        # after previous approval or seven-day topic dedup expiration.
         past=db.rows("SELECT status,attempts FROM live_clips WHERE video_id=:id",{'id':vid})
-        if past and (past[0]['status'] in ('FAILED','REJECTED','BLOCKED','DISCARDED') or
-                     past[0]['attempts']>=3):
+        if past:
             continue
         try:
             checked=verified_live({'id':vid,'channel_id':entry['channel_id']})
@@ -201,21 +222,16 @@ def enqueue_next():
             record_right(vid,entry['channel_id'],'BLOCKED',str(exc))
             continue
         permission=authorized_channel(entry['channel_id'],vid)
-        if not past:
-            ident=db.uid()
-            db.execute("""INSERT INTO live_clips
-               (id,video_id,channel_id,title,source_url,rights_evidence,status,
-                webcam_anchor,cut_target,attempts,score,created,updated)
-               VALUES (:id,:video,:channel,:title,:url,:rights,'QUEUED',
-                       'bottom_left',3,0,:score,:now,:now)""",
-                {'id':ident,'video':vid,'channel':entry['channel_id'],
-                 'title':entry.get('title','Live pública')[:250],
-                 'url':entry['url'],'rights':permission['evidence'],
-                 'score':0,'now':time.time()})
-        else:
-            ident=db.rows("SELECT id FROM live_clips WHERE video_id=:id",{'id':vid})[0]['id']
-            db.execute("UPDATE live_clips SET status='QUEUED',updated=:now WHERE id=:id",
-                       {'id':ident,'now':time.time()})
+        ident=db.uid()
+        db.execute("""INSERT INTO live_clips
+           (id,video_id,channel_id,title,source_url,rights_evidence,status,
+            webcam_anchor,cut_target,attempts,score,created,updated)
+           VALUES (:id,:video,:channel,:title,:url,:rights,'QUEUED',
+                   'bottom_left',3,0,:score,:now,:now)""",
+            {'id':ident,'video':vid,'channel':entry['channel_id'],
+             'title':entry.get('title','Live pública')[:250],
+             'url':entry['url'],'rights':permission['evidence'],
+             'score':0,'now':time.time()})
         record_right(vid,entry['channel_id'],'AUTHORIZED','Permissão do operador e VOD encerrado verificados antes de enfileirar.')
         db.enqueue('live_cut:'+ident,unique_key='livecut:'+ident)
         return {'queued':True,'clip_id':ident,'source_url':entry['url']}

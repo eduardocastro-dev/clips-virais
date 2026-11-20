@@ -166,7 +166,7 @@ def test_render_three_outputs_after_single_transcription(monkeypatch):
         file=folder/'dummy.wav';file.write_bytes(b'audio');return file
     monkeypatch.setattr(render,'_audio_first',fake_audio)
     monkeypatch.setattr(render,'_volume_levels',lambda a,f:([-27.0]*3600,f/'dummy.wav'))
-    def transcription(a,f):
+    def transcription(a,f,**kwargs):
         transcribed.append(True)
         return {'words':[{'text':'momento','start':2,'end':3}],
                 'segments':[{'start':2,'end':3,'text':'momento'}]}
@@ -222,7 +222,7 @@ def test_2_eligible_segments_do_not_become_3_fake_cuts(monkeypatch):
     monkeypatch.setattr(daily_quota,'within_deadline',lambda *a,**kw:True)
     monkeypatch.setattr(render,'_audio_first',lambda url,folder:folder/'cached.mp3')
     monkeypatch.setattr(render,'_volume_levels',lambda audio,folder:([-20.0]*3600,folder/'audio.wav'))
-    monkeypatch.setattr(render,'_whisperx_words',lambda audio,folder:{'words':[],'segments':[]})
+    monkeypatch.setattr(render,'_whisperx_words',lambda audio,folder,**kwargs:{'words':[],'segments':[]})
     monkeypatch.setattr(render,'_score_candidates',
                         lambda *args,**kwargs:[{'start':310,'end':340,'score':90},
                                                 {'start':1510,'end':1540,'score':90}])

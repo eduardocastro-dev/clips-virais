@@ -337,7 +337,10 @@ def scan_recent(limit=30):
             except (IntegrationError,ValueError) as exc:
                 errors.append(f"{vid}: {str(exc)[:120]}")
                 continue
-            if not public_recent_video(item,days=RADAR_WINDOW_DAYS,now=now):
+            # VOD scheduled weeks ago but finished yesterday is *recent*.
+            # Do not discard it based only on the original upload timestamp.
+            if not (public_recent_video(item,days=RADAR_WINDOW_DAYS,now=now) or
+                    public_ended_live(item,days=RADAR_WINDOW_DAYS,now=now)):
                 continue
             if item.get('channel_id')!=cid:
                 continue

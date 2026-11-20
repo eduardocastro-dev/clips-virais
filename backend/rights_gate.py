@@ -127,6 +127,10 @@ def confirm(video_id:str,evidence:str):
                         slot['rights_evidence']='Declaração de licença do operador'
                         slot['preview_only']=False
             db.atomic(file,json.dumps(previous,ensure_ascii=False,indent=2))
+    db.execute("""UPDATE videos SET status='AWAITING_MANUAL_DECISION',
+                  error=NULL,updated=:now WHERE id=:id AND
+                  status='PENDING_RIGHTS_REVIEW'""",
+               {'id':video_id,'now':time.time()})
     db.log_event(video_id,'rights','OPERATOR_CONFIRMED',
                  'Direitos declarados para os materiais de TV; revisão humana ainda necessária.')
     return {'status':'RIGHTS_CONFIRMED','pending':pending_sources(video_id),

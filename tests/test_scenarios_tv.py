@@ -86,6 +86,7 @@ def test_operator_can_record_license_after_render_but_still_must_approve(client)
     updated=db.rows('SELECT rights,evidence,approved FROM videos WHERE id=:id',{'id':video_id})[0]
     assert updated['rights']=='AUTHORIZED'
     assert updated['approved']==0
+    assert db.rows('SELECT status FROM videos WHERE id=:id',{'id':video_id})[0]['status']=='AWAITING_MANUAL_DECISION'
     assert pending_sources(video_id)==[]
     assert (db.DATA/'rights_log.json').is_file()
 

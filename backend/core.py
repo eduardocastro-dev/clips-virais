@@ -41,6 +41,11 @@ def transaction():
 def init_db():
     statements = [
         'CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)',
+        """CREATE TABLE IF NOT EXISTS editorial_rejections (
+            id TEXT PRIMARY KEY, video_id TEXT NOT NULL, title TEXT NOT NULL,
+            titles_json TEXT NOT NULL, source_url TEXT NOT NULL DEFAULT '',
+            created REAL NOT NULL, expires_at REAL NOT NULL)""",
+        'CREATE INDEX IF NOT EXISTS idx_editorial_rejections_expiry ON editorial_rejections(expires_at)',
         '''CREATE TABLE IF NOT EXISTS videos (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, url TEXT UNIQUE,
         platform TEXT, title TEXT, rights TEXT, evidence TEXT, credits TEXT, instructions TEXT,
         template TEXT, duration INTEGER, status TEXT, stage TEXT, revision INTEGER DEFAULT 0,

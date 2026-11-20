@@ -15,8 +15,11 @@ from fastapi.testclient import TestClient
 @pytest.fixture(autouse=True)
 def reset():
     db.init_db()
-    for table in ['metrics','publications','video_attempts','live_clip_outputs','live_clips','jobs','events','videos','notifications','profiles','opportunities','sources','usage','cache','assets','kv']:
+    for table in ['metrics','publications','video_attempts','live_clip_outputs','live_clips','jobs','events','videos','notifications','profiles','opportunities','sources','usage','cache','assets','editorial_rejections','kv']:
         db.execute(f'DELETE FROM {table}')
+    # Audit files are persistent in production, but each isolated test must
+    # start without editorial feedback from a previous test's deletion log.
+    (db.DATA / 'deletion_log.json').unlink(missing_ok=True)
     yield
 
 

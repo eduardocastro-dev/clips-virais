@@ -493,6 +493,27 @@ def video_attempts(id: str):
     return {'video_id':id,'attempts':items,'render_error':found[0]['render_error']}
 
 
+@app.get('/api/editorial/rejections', dependencies=protected)
+def editorial_rejections():
+    """Current editorial vetoes, saved separately from deleted video files."""
+    from backend.editorial_rejections import active,COOLDOWN_DAYS
+    items=active()
+    return {'items':[{'id':r['id'],'title':r['title'],'source_url':r['source_url'],
+                      'created':r['created'],'expires_at':r['expires_at']} for r in items],
+            'cooldown_days':COOLDOWN_DAYS}
+
+
+@app.delete('/api/editorial/rejections/{entry_id}', dependencies=protected)
+def remove_editorial_rejection(entry_id: str):
+    """Operator can deliberately allow a previously declined topic again."""
+    from backend.editorial_rejections import forget_entry
+    if not forget_entry(entry_id):
+        raise HTTPException(404,'Tema descartado não encontrado ou prazo já encerrado.')
+    db.log_event(None,'diretor','EDITORIAL_REJECTION_REMOVED',
+                 'Operador liberou novamente um tema anteriormente descartado.')
+    return {'removed':True}
+
+
 class ManualDecision(BaseModel):
     action: str = Field(pattern='^(approve|discard)$')
 

@@ -54,11 +54,11 @@ def _extract(url: str, *, flat=False, limit=1):
                                "ou tente novamente.") from None
 
 
-def public_video_info(video_url: str) -> dict:
+def public_video_info(video_url: str, *, fresh: bool=False) -> dict:
     vid=video_id_from_url(video_url)
-    from backend.youtube_data import configured,video_info
-    data=(video_info(video_url) if configured() else
-          _extract("https://www.youtube.com/watch?v="+vid))
+    from backend.youtube_data import configured,video_info,video_details
+    data=((video_details([vid],force=True).get(vid) if fresh else video_info(video_url))
+          if configured() else _extract("https://www.youtube.com/watch?v="+vid))
     if not isinstance(data,dict) or data.get("id")!=vid:
         raise IntegrationError("Vídeo público não encontrado ou ID divergente.")
     return data
@@ -153,8 +153,87 @@ def public_recent_video(info: dict, *, days=30, now=None) -> bool:
     return bool(date and timedelta(0)<=now-date<=timedelta(days=days))
 
 
+def _stream_time(value) -> datetime | None:
+    if isinstance(value,(int,float)) and value>0:
+        try:return datetime.fromtimestamp(value,timezone.utc)
+        except (ValueError,OverflowError,OSError):return None
+    if isinstance(value,str) and value.strip():
+        try:
+            dt=datetime.fromisoformat(value.replace("Z","+00:00"))
+            return dt.astimezone(timezone.utc) if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        except ValueError:return None
+    return None
+
+
+def live_ended_at(info: dict) -> datetime | None:
+    """Actual end is more meaningful than video upload for archived livestreams.
+
+    Live pages can be scheduled/uploaded weeks before the broadcast. Prefer
+    verified liveStreamingDetails.actualEndTime. Missing end metadata is
+    approximated using an actual stream start plus the finished VOD duration;
+    do not use scheduled start/end to establish a broadcast happened.
+    """
+    details=info.get('liveStreamingDetails') or {}
+    if not isinstance(details,dict):
+        details={}
+    for value in (details.get('actualEndTime'),info.get('actual_end_time'),
+                  info.get('live_end_timestamp')):
+        if (parsed:=_stream_time(value)) is not None:
+            return parsed
+    duration=info.get('duration')
+    start=_stream_time(details.get('actualStartTime'))
+    if start and info.get('live_status')=='was_live' and isinstance(duration,(int,float)) and duration>0:
+        return start+timedelta(seconds=duration)
+    # yt-dlp's release time is often closer to broadcast time than upload.
+    if info.get('live_status')=='was_live':
+        return (_stream_time(info.get('release_timestamp')) or
+                video_published_at(info))
+    return None
+
+
+def live_hype_recency_score(info: dict, *, days=30, now=None) -> int:
+    """0–100 editorial freshness score, not a forecast of real engagement."""
+    end=live_ended_at(info)
+    now=now or datetime.now(timezone.utc)
+    if not end:return 0
+    hours=(now-end).total_seconds()/3600
+    if hours<0:return 0
+    return max(0,round(100*(1-hours/(days*24))))
+
+
+def live_rejection_reason(info: dict, *, days=30, now=None) -> str:
+    now=now or datetime.now(timezone.utc)
+    if info.get('availability')!='public' or info.get('is_unlisted') or info.get('is_private'):
+        return 'O VOD precisa estar público (não privado nem não listado).'
+    if info.get('age_limit') not in (None,0):
+        return 'A gravação tem restrição de idade; este fluxo aceita somente VODs não restritos.'
+    status=info.get('live_status')
+    if info.get('is_live') or status=='is_live':
+        return 'Esta live ainda está em andamento. Aguarde o encerramento.'
+    if status=='is_upcoming':
+        return 'A live ainda não começou. Aguarde o encerramento e a publicação do replay.'
+    if status=='post_live':
+        return 'A live terminou, mas o replay ainda está em processamento no YouTube.'
+    duration=info.get('duration')
+    if not isinstance(duration,(int,float)) or duration<=0:
+        return 'O YouTube ainda não disponibilizou um replay com duração verificável.'
+    details=info.get('liveStreamingDetails') or {}
+    evidence=(status=='was_live' or
+              (isinstance(details,dict) and bool(details.get('actualEndTime'))))
+    if not evidence:
+        return 'O YouTube não confirmou que o vídeo é uma transmissão encerrada.'
+    end=live_ended_at(info)
+    if end is None:
+        return 'Não foi possível confirmar a data de encerramento da live.'
+    age=now-end
+    if age<timedelta(0):
+        return 'A data de encerramento informada pelo YouTube está no futuro.'
+    if age>timedelta(days=days):
+        return f'A live terminou há {age.days} dias; o limite para cortes automáticos é {days} dias.'
+    return ''
+
+
 def public_ended_live(info: dict, *, days=30, now=None) -> bool:
-    if not public_recent_video(info,days=days,now=now):
+    if not isinstance(info,dict):
         return False
-    status=info.get("live_status")
-    return status=="was_live" and not info.get("is_live") and bool(info.get("duration"))
+    return not live_rejection_reason(info,days=days,now=now)

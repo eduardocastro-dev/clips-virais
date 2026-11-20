@@ -19,6 +19,11 @@ from backend.integrations import IntegrationError
 from backend.live_cuts import verified_live, record_right, MIN_SCORE, MIN_DURATION, MAX_DURATION
 from backend import media
 
+# Never use the live's opening/waiting screen as a YouTube highlight.
+INTRO_SKIP_SECONDS = 5 * 60
+SELECTION_POLICY_VERSION = 2
+MIN_SEPARATION_SECONDS = 90
+
 
 def _run(args, timeout):
     try:
@@ -104,10 +109,76 @@ def _whisperx_words(path: Path, folder: Path):
     return payload
 
 
-def _score_candidates(transcript: dict, volumes: list[float], min_score=MIN_SCORE):
-    """Heuristic, independently auditable, 0-100 clip score; no score inflation."""
+def _minimum_gap(stream_duration: float) -> float:
+    """Spacing between clip *edges*, scaled to the whole VOD.
+
+    For long streams, prefer at least ten minutes between clips. For shorter
+    eligible VODs, enforce a minimum of 90 seconds instead of adjacent cuts.
+    """
+    available=max(0.0,stream_duration-INTRO_SKIP_SECONDS)
+    return max(float(MIN_SEPARATION_SECONDS),min(600.0,available/6.0))
+
+
+def _interval_gap(a: dict, b: dict) -> float:
+    """Positive distance between non-overlapping excerpts, otherwise negative."""
+    return max(float(a['start'])-float(b['end']),
+               float(b['start'])-float(a['end']))
+
+
+def _spread_candidates(candidates: list[dict], stream_duration: float,
+                       count: int=3) -> list[dict]:
+    """Keep score qualification, then prioritize diversity over similar timestamps.
+
+    The strongest qualifying moment anchors selection; subsequent moments are
+    chosen by max-min temporal distance across the full stream. Equal distances
+    prefer the better score. Never fill the quota with low-quality filler.
+    """
+    if count<=0 or not candidates:
+        return []
+    ordered=sorted(candidates,key=lambda x:(-float(x['score']),float(x['start'])))
+    minimum_gap=_minimum_gap(stream_duration)
+    selected=[ordered[0]]
+    while len(selected)<count:
+        eligible=[x for x in ordered if x not in selected and
+                  all(_interval_gap(x,previous)>=minimum_gap for previous in selected)]
+        if not eligible:
+            break
+        chosen=max(eligible,key=lambda x:(
+            min(_interval_gap(x,previous) for previous in selected),
+            float(x['score']),-float(x['start'])))
+        selected.append(chosen)
+    return sorted(selected,key=lambda x:x['start'])
+
+
+def _selection_valid(candidates, count: int, min_score: float,
+                     stream_duration: float) -> bool:
+    """Validate cached or regenerated choices before any download/render."""
+    if not isinstance(candidates,list) or len(candidates)<count:
+        return False
+    try:
+        selections=candidates[:count]
+        for item in selections:
+            start,end,score=(float(item[key]) for key in ('start','end','score'))
+            if (not all(math.isfinite(v) for v in (start,end,score)) or
+                start<INTRO_SKIP_SECONDS or end<=start or
+                not MIN_DURATION-.3<=end-start<=MAX_DURATION+.3 or
+                end>stream_duration+1 or score<min_score):
+                return False
+        return all(_interval_gap(left,right)>=_minimum_gap(stream_duration)
+                   for i,left in enumerate(selections) for right in selections[i+1:])
+    except (KeyError,TypeError,ValueError):
+        return False
+
+
+def _score_candidates(transcript: dict, volumes: list[float],
+                      min_score=MIN_SCORE, max_cuts: int=3):
+    """Score full-VOD highlights, excluding intro and spreading distinct moments."""
     segments=transcript.get('segments',[])
     if len(segments)<2:
+        return []
+    duration=max(float(len(volumes)),max(
+        (float(s.get('end') or 0) for s in segments),default=0.0))
+    if duration<INTRO_SKIP_SECONDS+MIN_DURATION:
         return []
     # Ignore silence; focus on peaks relative to the stream itself.
     baseline=statistics.median(volumes) if volumes else -32.0
@@ -115,6 +186,8 @@ def _score_candidates(transcript: dict, volumes: list[float], min_score=MIN_SCOR
     for i,start in enumerate(segments):
         try:
             begin=float(start['start'])
+            if not math.isfinite(begin) or begin<INTRO_SKIP_SECONDS:
+                continue
         except (KeyError,ValueError,TypeError):
             continue
         cursor=i
@@ -143,21 +216,14 @@ def _score_candidates(transcript: dict, volumes: list[float], min_score=MIN_SCOR
         score=hook+context+peak+evidence+engage
         if score < min_score:
             continue
-        indexed.append({'start':max(0,round(begin-.25,2)),
+        indexed.append({'start':max(INTRO_SKIP_SECONDS,round(begin-.25,2)),
                         'end':round(finish+.30,2),'score':float(score),
                         'type':'destaque com contexto',
                         'transcript':text[:1800],
                         'reason':f'gancho={hook}; contexto={context}; clímax={peak}; '
                                  f'pico áudio={max_gain:.1f}dB; interação={engage}',
                         'peak_db_above_median':round(max_gain,1)})
-    indexed.sort(key=lambda x:x['score'],reverse=True)
-    selected=[]
-    for item in indexed:
-        if all(item['end']<=existing['start'] or item['start']>=existing['end'] for existing in selected):
-            selected.append(item)
-        if len(selected)>=3:
-            break
-    return selected
+    return _spread_candidates(indexed,duration,max_cuts)
 
 
 def _get_range(url: str, start: float, end: float, folder: Path):
@@ -250,13 +316,24 @@ def _persist_output(clip, choice, ordinal, output, cover, metadata_file, title):
                     :end,:file,:cover,:meta,:now,:now)""",params)
 
 
-def _validated_output(clip, ordinal):
+def _validated_output(clip, ordinal, choice=None):
     rows=db.rows("""SELECT * FROM live_clip_outputs WHERE parent_id=:parent
                     AND ordinal=:ordinal""",
                  {'parent':clip['id'],'ordinal':ordinal})
     if not rows:
         return None
     row=rows[0]
+    if choice is not None and (
+        row['segment_start'] is None or row['segment_end'] is None or
+        abs(float(row['segment_start'])-float(choice['start']))>.01 or
+        abs(float(row['segment_end'])-float(choice['end']))>.01):
+        # Older cached cuts can violate the new intro/spread policy. Never
+        # silently replace an already human-approved deliverable.
+        if row['status']=='APPROVED':
+            raise IntegrationError(
+                'Corte já aprovado usa timestamps antigos. '
+                'Reprocesse a live explicitamente para aplicar a nova política.')
+        return None
     if row['status'] in ('REVIEW_PENDING','APPROVED') and row['file_path']:
         try:
             file=db.safe_file(row['file_path'])
@@ -300,26 +377,32 @@ def render_clip(clip_id):
     transcript=_whisperx_words(wav,folder)
     _set_stage(clip_id,'SELECTING')
     choices_file=folder/'candidates.json'
+    stream_duration=max(float(len(volume)),max(
+        (float(s.get('end') or 0) for s in transcript.get('segments',[])),default=0.0))
+    threshold=quota_config()['min_live_score']
+    cached={}
     if choices_file.is_file():
         try:
-            candidates=json.loads(choices_file.read_text('utf-8'))
+            cached=json.loads(choices_file.read_text('utf-8'))
         except (OSError,ValueError):
-            candidates=[]
-    else:
-        candidates=[]
-    threshold=quota_config()['min_live_score']
-    # A cached candidate selection from an older run must not bypass a new,
-    # stricter operator score threshold after a reprocess or restart.
-    if any(float(item.get('score') or 0)<threshold for item in candidates):
-        candidates=[]
-    if len(candidates)<total:
+            cached={}
+    # Old array-only caches were generated with no intro/spacing guard.
+    candidates=(cached.get('cuts',[]) if isinstance(cached,dict) and
+                cached.get('selection_policy_version')==SELECTION_POLICY_VERSION and
+                cached.get('stream_duration')==stream_duration else [])
+    if not _selection_valid(candidates,total,threshold,stream_duration):
         candidates=_score_candidates(
-            transcript,volume,min_score=threshold)
-        if len(candidates)<total:
+            transcript,volume,min_score=threshold,max_cuts=total)
+        if not _selection_valid(candidates,total,threshold,stream_duration):
             raise IntegrationError(
-                f'Só {len(candidates)} trechos distintos passaram no score mínimo. '
-                f'São necessários {total}; não serão inventados cortes ou reduzida a nota.')
-        db.atomic(choices_file,json.dumps(candidates,ensure_ascii=False,indent=2))
+                f'Só {len(candidates)} trechos válidos ficaram disponíveis após ignorar '
+                f'os primeiros 5 minutos, aplicar o score mínimo {threshold} e exigir '
+                f'espaçamento de {_minimum_gap(stream_duration):.0f}s entre cortes. '
+                f'São necessários {total}; não serão criados cortes repetidos ou artificiais.')
+        db.atomic(choices_file,json.dumps({
+            'selection_policy_version':SELECTION_POLICY_VERSION,
+            'stream_duration':stream_duration,'score_threshold':threshold,
+            'cuts':candidates},ensure_ascii=False,indent=2))
     selections=candidates[:total]
     output_dir=db.ROOT/'videos'/'final'/'live_cuts'/clip_id
     output_dir.mkdir(parents=True,exist_ok=True)
@@ -328,7 +411,7 @@ def render_clip(clip_id):
     for index,choice in enumerate(selections,1):
         if not authorized_channel(clip['channel_id'],clip['video_id']):
             raise IntegrationError('Autorização de corte revogada durante a produção.')
-        if _validated_output(clip,index):
+        if _validated_output(clip,index,choice):
             _set_stage(clip_id,f'RENDERED_{index}')
             continue
         if not within_deadline(quota_config()):
